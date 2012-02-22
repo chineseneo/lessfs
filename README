@@ -1,0 +1,2 @@
+data deduplication file system.
+task is to add sliding block algorithm to it and improve performance.
