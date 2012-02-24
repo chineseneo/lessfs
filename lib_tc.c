@@ -73,6 +73,7 @@ extern BLKDTA **tdta;
 extern char *passwd;
 
 TCHDB *dbb = NULL;
+TCHDB *dbbo = NULL;
 TCHDB *dbu = NULL;
 TCHDB *dbp = NULL;
 TCBDB *dbl = NULL;              // Hardlink
@@ -209,6 +210,9 @@ void log_fatal_hash(char *msg, unsigned char *bhash)
     free(ascii_hash);
 }
 
+/*
+ * open one database
+ */
 TCHDB *hashdb_open(char *dbpath, int cacherow,
                    unsigned long long bucketsize)
 {
@@ -239,6 +243,9 @@ TCHDB *hashdb_open(char *dbpath, int cacherow,
     return hdb;
 }
 
+/*
+ * optimize all databases
+ */
 void tc_defrag()
 {
     LINFO("%s start", __FUNCTION__);
@@ -267,7 +274,11 @@ void tc_defrag()
         LINFO("hardlink.tcb not optimized");
 }
 
-
+/*
+ * open all database, 
+ * if createpath is true, the new database will be created and initialized
+ * if defrag if true, the dynamic defrag option will be on
+ */
 void tc_open(bool defrag, bool createpath)
 {
     char *dbpath;
@@ -388,6 +399,9 @@ void tc_open(bool defrag, bool createpath)
     EFUNC;
 }
 
+/*
+ * close a hash database
+ */
 void hashdb_close(TCHDB * hdb)
 {
     int ecode;
@@ -403,6 +417,9 @@ void hashdb_close(TCHDB * hdb)
     tchdbdel(hdb);
 }
 
+/*
+ * close all databases
+ */
 void tc_close(bool defrag)
 {
     int ecode;
@@ -1850,7 +1867,7 @@ void update_filesize_onclose(unsigned long long inode)
 }
 
 /*
- * check the dbcache and then dbp for meta data and update the filesize it
+ * used in truncate operation to update filesize. no need for data operation, just change size.
  */
 int update_filesize_cache(struct stat *stbuf, off_t size)
 {
@@ -1912,7 +1929,7 @@ int update_filesize_cache(struct stat *stbuf, off_t size)
 }
 
 /*
- * update filesize when new block is added
+ * update filesize when new block is added, or block is updated
  */
 void update_filesize(unsigned long long inode, unsigned long long fsize,
                      unsigned int offsetblock, unsigned long long blocknr,
@@ -2103,12 +2120,9 @@ void delete_data_cache_or_db(unsigned char *chksum,
 }
 
 /*
- * 
- * 
- * 
+ * delete = 1 Do delete dbdata
+ * delete = 0 Do not delete dbdta 
  */
-/* delete = 1 Do delete dbdata
-   delete = 0 Do not delete dbdta */
 unsigned int db_commit_block(unsigned char *dbdata, unsigned char *chksum,
                              INOBNO inobno, bool delete)
 {
@@ -2154,9 +2168,7 @@ unsigned int db_commit_block(unsigned char *dbdata, unsigned char *chksum,
 }
 
 /*
- * 
- * 
- * 
+ * add block to the block cache, wait for updating or move to dbdtaq
  */
 void add_blk_to_cache(unsigned long long inode, unsigned long long blocknr,
                       unsigned char *data)
@@ -2174,14 +2186,10 @@ void add_blk_to_cache(unsigned long long inode, unsigned long long blocknr,
 }
 
 /*
- * 
- * 
- * 
+ * mode = 0 -> update the block and delete dbdta
+ * mode = 1 -> no matter what block exists in the blkcache, flush it
+ * mode = 2 -> dbdta has not been written so don't delete
  */
-/* mode = 0 -> update the block and delete dbdta
-   mode = 1 -> flush the inode
-   mode = 2 -> dbdta has not been written so don't delete
-*/
 DBT *try_block_cache(unsigned long long inode, unsigned long long blocknr,
                      unsigned int mode)
 {
@@ -2241,9 +2249,7 @@ DBT *try_block_cache(unsigned long long inode, unsigned long long blocknr,
 }
 
 /*
- * 
- * 
- * 
+ * delete old record in dbdtaq or dbdta or blkcache, and add new block into blkcache
  */
 void db_update_block(const char *blockdata, unsigned long long blocknr,
                      unsigned int offsetblock,
@@ -2390,9 +2396,7 @@ void db_update_block(const char *blockdata, unsigned long long blocknr,
 }
 
 /*
- * 
- * 
- * 
+ * search for record key:kvalue and delete the record
  */
 int btdelete_curkey(TCBDB * db, void *key, int keylen, void *kvalue,
                     int kvallen)
@@ -2441,9 +2445,7 @@ int btdelete_curkey(TCBDB * db, void *key, int keylen, void *kvalue,
 }
 
 /*
- * 
- * 
- * 
+ * search for the record key:val
  */
 void *btsearch_keyval(TCBDB * db, void *key, int keylen, void *val,
                       int vallen)
@@ -2498,7 +2500,7 @@ void *btsearch_keyval(TCBDB * db, void *key, int keylen, void *val,
 }
 
 /* 
- * count the hard link of which the key is dinoino, this shows how many hard links of an inode is in
+ * count the hard link of dinoino, this shows how many hard links of an inode is in
  * one dir. Return 0, 1 or 2 if more then 2 we stop counting 
  */
 int count_dirlinks(void *linkstr, int len)
@@ -2530,9 +2532,7 @@ int count_dirlinks(void *linkstr, int len)
 }
 
 /*
- * 
- * 
- * 
+ * delete the record indicated by the key in Hash DB
  */
 void delete_key(TCHDB * db, void *keydata, int len)
 {
@@ -2545,9 +2545,7 @@ void delete_key(TCHDB * db, void *keydata, int len)
 }
 
 /*
- * 
- * 
- * 
+ * delete the record indicated by the key in memory hash DB
  */
 void mdelete_key(TCMDB * db, void *keydata, int len)
 {
@@ -2557,9 +2555,7 @@ void mdelete_key(TCMDB * db, void *keydata, int len)
 }
 
 /*
- * 
- * 
- * 
+ * delete the record indicated by the key in memory B+ tree DB
  */
 void ndelete_key(TCNDB * db, void *keydata, int len)
 {
@@ -2569,9 +2565,7 @@ void ndelete_key(TCNDB * db, void *keydata, int len)
 }
 
 /*
- * 
- * 
- * 
+ * search and return the hash of the block if found
  */
 DBT *check_block_exists(INOBNO inobno)
 {
@@ -2625,9 +2619,7 @@ DBT *check_block_exists(INOBNO inobno)
 }
 
 /*
- * 
- * 
- * 
+ * returns when no thread is working on any blocks of this inode
  */
 void wait_io_pending(unsigned long long inode)
 {
@@ -2650,9 +2642,7 @@ void wait_io_pending(unsigned long long inode)
 }
 
 /*
- * 
- * 
- * 
+ * returns when no thread is working on this block of this inode
  */
 void wait_inode_block_pending(unsigned long long inode,
                               unsigned long long blocknr)
@@ -2679,9 +2669,7 @@ void wait_inode_block_pending(unsigned long long inode,
 }
 
 /*
- * 
- * 
- * 
+ * check if there is any threads working on this block of this inode
  */
 int inode_block_pending(unsigned long long inode,
                         unsigned long long blocknr)
@@ -2705,9 +2693,7 @@ int inode_block_pending(unsigned long long inode,
 }
 
 /*
- * 
- * 
- * 
+ * delete file, symbolic-link or hard-link
  */
 int db_unlink_file(const char *path)
 {
@@ -2898,7 +2884,6 @@ int db_unlink_file(const char *path)
 /*
  * create a directory, including the current dir, the sub /. dir and the sub /.. dir
  * and update parent metadata
- *
  */
 int fs_mkdir(const char *path, mode_t mode)
 {
@@ -3214,7 +3199,7 @@ int sync_flush_dbb()
 }
 
 /*
- * flush data from dbdtaq to dbdta
+ * choose which mode to use dbdta queue flush
  */
 void sync_flush_dtaq()
 {
@@ -3227,7 +3212,8 @@ void sync_flush_dtaq()
 }
 
 /*
- * update the ctime and mtime and number of links of the inode
+ * update the ctime and mtime and when changes happen to the sub dirs, number of links of the inode
+ * will be changed
  */
 int update_parent_time(char *path, int linkcount)
 {
@@ -3254,9 +3240,7 @@ int update_parent_time(char *path, int linkcount)
 }
 
 /*
- * 
- * 
- * 
+ * delete the directory indicated by the path
  */
 int fs_rmdir(const char *path)
 {
@@ -3311,7 +3295,7 @@ int fs_rmdir(const char *path)
 }
 
 /*
- * find and return the inode information of a file or dir
+ * find and return the inode of a file or dir
  */
 unsigned long long get_inode(const char *path)
 {
@@ -3464,9 +3448,7 @@ void fil_fuse_info(DDSTAT * ddstat, void *buf, fuse_fill_dir_t filler,
 }
 
 /*
- * 
- * 
- * 
+ * get the info of entry in the directory
  */
 int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
                off_t offset, struct fuse_file_info *fi)
@@ -3669,9 +3651,7 @@ int fs_link(char *from, char *to)
 }
 
 /*
- * 
- * 
- * 
+ * check whether the record exist. (only used in fs_link, check whether the hardlink info exists)
  */
 int bt_entry_exists(TCBDB * db, void *parent, int parentlen, void *value,
                     int vallen)
@@ -3716,9 +3696,7 @@ int bt_entry_exists(TCBDB * db, void *parent, int parentlen, void *value,
 }
 
 /*
- * 
- * 
- * 
+ * generate the symbolic link
  */
 int fs_symlink(char *from, char *to)
 {
@@ -3735,9 +3713,7 @@ int fs_symlink(char *from, char *to)
 }
 
 /*
- * 
- * 
- * 
+ * read symbolic link info
  */
 int fs_readlink(const char *path, char *buf, size_t size)
 {
@@ -3767,8 +3743,6 @@ int fs_readlink(const char *path, char *buf, size_t size)
 
 /*
  * delete the original link and create a new one with the new file name
- * 
- * 
  */
 int fs_rename_link(const char *from, const char *to, struct stat stbuf)
 {
@@ -3850,9 +3824,7 @@ int fs_rename_link(const char *from, const char *to, struct stat stbuf)
 }
 
 /*
- * 
- * 
- * 
+ * update the dbcache with infomation in stbuf
  */
 void update_cache(unsigned long long inode, struct stat *stbuf)
 {
@@ -3881,9 +3853,7 @@ void update_cache(unsigned long long inode, struct stat *stbuf)
 }
 
 /*
- * 
- * 
- * 
+ * change the name of file, dir or hardlink or symlink
  */
 int fs_rename(const char *from, const char *to, struct stat stbuf)
 {
@@ -4016,9 +3986,7 @@ int update_stat(char *path, struct stat *stbuf)
 }
 
 /*
- * 
- * 
- * 
+ * read configuration from file and save to system variable
  */
 void parseconfig(int mklessfs)
 {
@@ -4272,7 +4240,6 @@ void clear_dirty()
  * check dbu for the entry with key "LESSFS_BLOCKSIZE", if it does not exist, 
  * write the current blocksize to dbu
  * the value(inuse info) is the blocksize that this filesystem uses
- * 
  */
 int get_blocksize()
 {

@@ -227,7 +227,10 @@ static int lessfs_readlink(const char *path, char *buf, size_t size)
     return (res);
 }
 
-
+/*
+ * fill the sub dir info into buf
+ *
+ */
 static int lessfs_readdir(const char *path, void *buf,
                           fuse_fill_dir_t filler, off_t offset,
                           struct fuse_file_info *fi)
@@ -709,13 +712,113 @@ redo:
 }
 
 /*
- *write data of which the length is size and starts from offset to the data base.
- *size is specified in FUSE with the args in lessfs mount.
+ * write data of which the length is size and starts from offset to the data base.
+ * size is specified in FUSE with the args in lessfs mount.
  */
 static int lessfs_write(const char *path, const char *buf, size_t size,
                         off_t offset, struct fuse_file_info *fi)
 {
     unsigned long long blocknr;
+    unsigned int offsetblock;
+    DBT *blocktiger;
+    DBT *data;
+    size_t bsize;
+    size_t done = 0;
+    int res;
+    INOBNO inobno;
+
+    FUNC;
+    LINFO("%s: path = %s, size = %llu, offset=%llu", __FUNCTION__, 
+		path, (unsigned long long)size, (unsigned long long)offset);
+    tiger_lock();
+    bsize = size;
+    //blocknr = offset / BLKSIZE;
+    blocknr = 0;
+    while(1){
+		
+    }
+
+    offsetblock = offset - (blocknr * BLKSIZE);
+    if ((offsetblock + bsize) > BLKSIZE) {
+        bsize = BLKSIZE - offsetblock;
+    }
+    blkdta->inode = fi->fh;
+    inobno.inode = fi->fh;
+	//notice that the offset printed is the offsetblock rather than offset itself...	
+    LDEBUG("lessfs_write : %s - %llu-%llu size %llu offset %u",path,
+		inobno.inode,blocknr,(unsigned long long)size,offsetblock);
+  wagain:
+    inobno.blocknr = blocknr;
+	/*  When I/O for this inode - blocknr is pending this operation will be an update */
+    wait_inode_block_pending(inobno.inode, inobno.blocknr);
+    memset((char *) blkdta->blockdata, 0, BLKSIZE);
+    LDEBUG("lessfs_write -> try_block_cache : inode %llu blocknr %llu",
+           fi->fh, blocknr);
+    data = try_block_cache(inobno.inode, inobno.blocknr, 2);
+    if (NULL != data) {
+
+        memcpy((char *) blkdta->blockdata, data->data, data->size);
+        memcpy((char *) blkdta->blockdata + offsetblock, buf + done,
+               bsize);
+        add_blk_to_cache(inobno.inode, inobno.blocknr,
+                         (unsigned char *) blkdta->blockdata);
+        update_filesize(inobno.inode, bsize, offsetblock, blocknr, 0, 0,
+                        0);
+        DBTfree(data);
+        res = 2;
+    } else
+        res = 0;
+    if (2 != res) {
+        blocktiger = check_block_exists(inobno);
+        if (NULL != blocktiger) {
+            LDEBUG
+                ("lessfs_write -> update_block : inode %llu blocknr %llu",
+                 fi->fh, blocknr);
+            if (NULL != config->blockdatabs) {
+                db_update_block(buf + done, blocknr, offsetblock, bsize,
+                                blkdta->inode, blocktiger->data);
+            } else {
+                file_update_block(buf + done, blocknr, offsetblock, bsize,
+                                  blkdta->inode, blocktiger->data);
+            }
+            DBTfree(blocktiger);
+            release_global_lock();
+        } else {
+            LDEBUG
+                ("lessfs_write -> add_block : inode %llu blocknr %llu",
+                 fi->fh, blocknr);
+            blkdta->blocknr = blocknr;
+            blkdta->offsetblock = offsetblock;
+            blkdta->bsize = bsize;
+            blkdta->buf=(unsigned char *)buf+done;
+            if (1 == res) {
+                blkdta->sparse = 1;
+            } else {
+                blkdta->sparse = 0;
+            }
+            release_worker_lock();
+            release_global_lock();
+            write_lock();
+        }
+    } else
+        release_global_lock();
+    done = done + bsize;
+    bsize = (size - done) > BLKSIZE? BLKSIZE : size - done;
+	printf("%s: bsize = %llu", __FUNCTION__, bsize);
+    if (done < size) {
+        blocknr++;
+        offsetblock = 0;
+        goto wagain;
+    }
+    release_tiger_lock();
+    LDEBUG("lessfs_write : inode %llu blocknr %llu", fi->fh, blocknr);
+    EFUNC;
+    return (done);
+}
+
+static int slide_block_dedup()
+{
+	unsigned long long blocknr;
     unsigned int offsetblock;
     DBT *blocktiger;
     DBT *data;

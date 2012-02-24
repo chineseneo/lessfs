@@ -557,6 +557,9 @@ void put_on_freelist(INUSE * inuse)
     return;
 }
 
+/*
+ * for uncomplete block, this function will append new data to the block and update
+ */
 void file_update_block(const char *blockdata, unsigned long long blocknr,
                        unsigned int offsetblock,
                        unsigned long long size, unsigned long long inode,
@@ -692,6 +695,9 @@ void file_update_block(const char *blockdata, unsigned long long blocknr,
     return;
 }
 
+/*
+ * change filesize, in file_io mode
+ */
 int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
 {
     unsigned int offsetblock;
