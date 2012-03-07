@@ -711,6 +711,7 @@ void file_update_block(const char *blockdata, unsigned long long blocknr,
 int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
 {
     unsigned int offsetblock;
+	unsigned long long inode;
     unsigned long long blocknr;
     unsigned long long lastblocknr;
     INUSE *inuse;
@@ -718,17 +719,27 @@ int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
     off_t oldsize;
     DBT *data;
     INOBNO inobno;
+	OFFHASH offHash;
+	OFFHASH oldoffHash;
     time_t thetime;
 
     FUNC;
     LDEBUG("file_fs_truncate inode %llu - size %llu", stbuf->st_ino,
            (unsigned long long) size);
     thetime = time(NULL);
-    blocknr = size / BLKSIZE;
-    offsetblock = size - (blocknr * BLKSIZE);
+	inode = stbuf->st_ino;
+    blocknr = get_blocknr(inode, size);
+
+	//if the new size is bigger, no need to get the offsetblock
+	if (NULL != (offHash = get_offhash(inode, blocknr)))
+		offsetblock = size - offHash.offsetfile;
     oldsize = stbuf->st_size;
-    lastblocknr = oldsize / BLKSIZE;
-    update_filesize_cache(stbuf, size);
+    lastblocknr = get_blocknr(inode, oldsize);
+
+	//if the lastblocknr is out of bound, reduce it
+	if (NULL == (oldoffHash = get_offhash(inode, lastblocknr)))
+		lastblocknr--;
+	update_filesize_cache(stbuf, size);
     LDEBUG("file_fs_truncate : truncate new block %llu, oldblock %llu",
            blocknr, lastblocknr);
     while (lastblocknr >= blocknr) {
@@ -755,8 +766,9 @@ int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
 // Need to continue in case of a sparse file.
             continue;
         }
-        stiger = s_malloc(data->size);
-        memcpy(stiger, data->data, data->size);
+		memcpy(&oldoffHash, data->data, data->size);
+        stiger = s_malloc(config->hashlen);
+        memcpy(stiger, &oldoffHash.stiger, strlen(&oldoffHash.stiger));
         LDEBUG
             ("file_fs_truncate : lessfs_truncate Search to delete blocknr %llu:",
              lastblocknr);
@@ -791,12 +803,12 @@ int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
 }
 
 void file_partial_truncate_block(struct stat *stbuf,
-                                 unsigned long long blocknr,
-                                 unsigned int offset)
+                                 unsigned long long blocknr, unsigned int offset)
 {
     unsigned char *blockdata;
     compr *uncompdata;
     INOBNO inobno;
+	OFFHASH offHash;
     DBT *data;
     unsigned char *stiger;
     INUSE *inuse;
@@ -818,17 +830,19 @@ void file_partial_truncate_block(struct stat *stbuf,
         LDEBUG("file_partial_truncate_block : deletion of non existent block.");
         return;
     }
-    stiger = s_malloc(data->size);
-    loghash("file_partial_truncate_block : search tiger ", stiger);
-    memcpy(stiger, data->data, data->size);
+	memcpy(&offHash, data->data, data->size);
+    stiger = s_malloc(config->hashlen);
+    memcpy(stiger, &offHash.stiger, strlen(&offHash.stiger));
+    loghash("file_partial_truncate_block : search tiger %s", stiger);
     DBTfree(data);
 
     blockdata = s_malloc(BLKSIZE);
     memset(blockdata, 0, BLKSIZE);
 // First try the cache
     get_moddb_lock();
-       data = search_memhash(dbdtaq, stiger, config->hashlen);
-       if ( NULL != data ) die_dataerr("file_partial_truncate_block : not data in cache expected");
+    data = search_memhash(dbdtaq, stiger, config->hashlen);
+    if ( NULL != data ) 
+	   	die_dataerr("file_partial_truncate_block : not data in cache expected");
     release_moddb_lock();
     if ( NULL == data ) {
        data = file_tgr_read_data(stiger);
@@ -845,7 +859,7 @@ void file_partial_truncate_block(struct stat *stbuf,
           } else {
               memcpy(blockdata, data->data, offset);
           }
-          file_commit_block(blockdata,NULL,inobno,0);
+          file_commit_block(blockdata, NULL, inobno, 0, offHash.offsetfile);
           DBTfree(data);
        }
     } else {
@@ -856,7 +870,7 @@ void file_partial_truncate_block(struct stat *stbuf,
        memcpy(blockdata, cachedata.data, offset);
        free(cachedata.data);
        DBTfree(data);
-       file_commit_block(blockdata,NULL,inobno,0);
+       file_commit_block(blockdata, NULL, inobno, 0, offHash.offsetfile);
     }
     free(blockdata);
 
