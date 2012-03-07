@@ -236,6 +236,7 @@ void file_qdta(INOBNO * inobno, unsigned char *stiger, unsigned char *data,
 void add_file_block(BLKDTA * blkdta)
 {
     INOBNO inobno;
+	OFFHASH offFileHash;
     DBT *cachedata = NULL;
     INUSE *inuse;
 
@@ -250,15 +251,18 @@ void add_file_block(BLKDTA * blkdta)
         cachedata = try_block_cache(blkdta->inode, blkdta->blocknr, 0);
         if (cachedata)
             DBTfree(cachedata);
-        add_blk_to_cache(blkdta->inode, blkdta->blocknr,
-                         blkdta->blockfiller);
-        LDEBUG
-            ("add_file_block : wrote with add_blk_to_cache  : inode %llu - %llu size %i",
-             inobno.inode, inobno.blocknr, blkdta->bsize);
+        add_blk_to_cache(blkdta->inode, blkdta->blocknr, blkdta->blockfiller, 
+			blkdta->offsetfile);
+        LDEBUG("%s : wrote with add_blk_to_cache  : inode %llu - %llu size %i",
+             __FUNCTION__, inobno.inode, inobno.blocknr, blkdta->bsize);
         update_filesize(blkdta->inode, blkdta->bsize, blkdta->offsetblock,
                         blkdta->blocknr, blkdta->sparse, 0, 0);
         return;
     }
+	
+	offFileHash.offsetfile = blkdta.offsetfile;
+	memcpy(&offFileHash.stiger, blkdta->stiger, config->hashlen);
+	
     inuse = file_get_inuse(blkdta->stiger);
     if (inuse == NULL) {
         if (NULL == blkdta->compressed) {
@@ -292,7 +296,7 @@ void add_file_block(BLKDTA * blkdta)
         comprfree(blkdta->compressed);
     inuse->inuse = inuse->inuse + 1;
     file_update_inuse(blkdta->stiger, inuse);
-    write_dbb_to_cache(&inobno,blkdta->stiger);
+    write_dbb_to_cache(&inobno, &offFileHash);
     free(inuse);
     EFUNC;
     return;
@@ -302,10 +306,11 @@ void add_file_block(BLKDTA * blkdta)
    delete = 0 Do not delete dbdta */
 unsigned int file_commit_block(unsigned char *dbdata,
                                unsigned char *chksum, INOBNO inobno,
-                               bool delete)
+                               bool delete, off_t offsetFile)
 {
     unsigned char *stiger;
     compr *compressed;
+	OFFHASH offFileHash;
     INUSE *inuse;
     unsigned int ret = 0;
 #ifndef SHA3
@@ -319,6 +324,8 @@ unsigned int file_commit_block(unsigned char *dbdata,
     binhash(dbdata, BLKSIZE, res);
     stiger=(unsigned char *)&res;
 #endif
+	offFileHash.offsetfile = offsetFile;
+	memcpy(&offFileHash.stiger, stiger, config->hashlen);
 #ifdef LZO
     compressed = lzo_compress((unsigned char *) dbdata, BLKSIZE);
 #else
@@ -339,7 +346,7 @@ unsigned int file_commit_block(unsigned char *dbdata,
     inuse->inuse++;
     file_update_inuse(stiger, inuse);
     comprfree(compressed);
-    write_dbb_to_cache(&inobno,stiger);
+    write_dbb_to_cache(&inobno, &offFileHash);
 #ifdef SHA3
     free(stiger);
 #endif
@@ -389,6 +396,7 @@ unsigned long long file_read_block(unsigned long long blocknr,
     unsigned char *dtiger;
     compr *uncompdata = NULL;
     INOBNO inobno;
+	OFFHASH offHash;
     BLKCACHE *blk;
     bool compressed = 1;
     QDTA *dta;
@@ -403,7 +411,8 @@ unsigned long long file_read_block(unsigned long long blocknr,
     if (NULL != data) {
         LDEBUG("file_read_block : block %llu - %llu found in cache", inode,
                blocknr);
-        memcpy(blockdata, data->data, data->size);
+		blk = (BLKCACHE *)(data->data);
+        memcpy(blockdata, blk->blockdata, strlen(blk->blockdata));
         ret = data->size;
         DBTfree(data);
         return (ret);
@@ -416,8 +425,9 @@ unsigned long long file_read_block(unsigned long long blocknr,
         return (ret);
     }
 // Not needed to copy this.
-    stiger = s_malloc(data->size);
-    memcpy(stiger, data->data, data->size);
+	memcpy(&offHash, data->data, data->size);
+    stiger = s_malloc(config->hashlen);
+    memcpy(stiger, &offHash.stiger, config->hashlen);
     DBTfree(data);
 // First try the cache
     get_moddb_lock();
@@ -430,8 +440,7 @@ unsigned long long file_read_block(unsigned long long blocknr,
                  inobno.inode, inobno.blocknr);
         } else {
 
-            cachedata =
-                search_memhash(blkcache, &inobno.inode,
+            cachedata = search_memhash(blkcache, &inobno.inode,
                                sizeof(unsigned long long));
             if (NULL != cachedata) {
                 blk = (BLKCACHE *) cachedata->data;
@@ -561,9 +570,9 @@ void put_on_freelist(INUSE * inuse)
  * for uncomplete block, this function will append new data to the block and update
  */
 void file_update_block(const char *blockdata, unsigned long long blocknr,
-                       unsigned int offsetblock,
-                       unsigned long long size, unsigned long long inode,
-                       unsigned char *chksum)
+                       unsigned int offsetblock, unsigned long long size, 
+                       unsigned long long inode, unsigned char *chksum, 
+                       off_t offsetFile)
 {
     DBT *data = NULL;
     DBT *decrypted = NULL;
@@ -593,9 +602,10 @@ void file_update_block(const char *blockdata, unsigned long long blocknr,
     data = try_block_cache(inode, blocknr, 0);
     if (NULL != data) {
         LDEBUG("try_block_cache : HIT");
-        memcpy(dbdata, data->data, data->size);
+		blk = (BLKCACHE *)(data->data);
+        memcpy(dbdata, blk->blockdata, strlen(blk->blockdata));
         memcpy(dbdata + offsetblock, blockdata, size);
-        add_blk_to_cache(inode, blocknr, dbdata);
+        add_blk_to_cache(inode, blocknr, dbdata, offsetFile);
         update_filesize(inode, size, offsetblock, blocknr, 0, 0, 0);
         free(dbdata);
         DBTfree(data);
@@ -617,7 +627,7 @@ void file_update_block(const char *blockdata, unsigned long long blocknr,
                     search_memhash(blkcache, &inobno.inode,
                                    sizeof(unsigned long long));
                 if (NULL != cachedata) {
-                    blk = (BLKCACHE *) cachedata->data;
+                    blk = (BLKCACHE *) (cachedata->data);
 #ifdef SHA3
                     dtiger=sha_binhash(blk->blockdata, BLKSIZE);
 #else
@@ -676,7 +686,7 @@ void file_update_block(const char *blockdata, unsigned long long blocknr,
         DBTfree(data);
     }
     memcpy(dbdata + offsetblock, blockdata, size);
-    add_blk_to_cache(inode, blocknr, dbdata);
+    add_blk_to_cache(inode, blocknr, dbdata, offsetFile);
     inuse = file_get_inuse(chksum);
     if (NULL == inuse)
         die_dataerr("file_update_block : hash not found");

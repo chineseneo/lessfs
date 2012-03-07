@@ -651,7 +651,9 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
 static int lessfs_read(const char *path, char *buf, size_t size,
                        off_t offset, struct fuse_file_info *fi)
 {
+	unsigned long long inode;
     unsigned long long blocknr;
+	OFFHASH offHash;
     size_t done = 0;
     size_t got = 0;
     size_t block_offset = 0;
@@ -664,6 +666,7 @@ static int lessfs_read(const char *path, char *buf, size_t size,
 
     get_global_lock();
 // Change this to creating a buffer that is allocated once.
+	inode = fi->fh;
     tmpbuf = s_malloc(BLKSIZE + 1);
     memset(buf, 0, size);
 redo:
@@ -671,9 +674,10 @@ redo:
     LDEBUG("lessfs_read called offset : %llu, size bytes %llu",
            (unsigned long long) offset, (unsigned long long) size);
     while (done < size) {
-        blocknr = (offset + done) / BLKSIZE;
         LDEBUG("blocknr to read :%llu", (unsigned long long) blocknr);
-        block_offset = (done + offset) - (blocknr * BLKSIZE);
+    	blocknr = get_blocknr(inode, offset + done);
+		offHash = get_offhash(inode, blocknr);
+        block_offset = (done + offset) - offHash.offsetfile;
         if (NULL != config->blockdatabs) {
             got = readBlock(blocknr, path, tmpbuf, fi->fh);
         } else
@@ -696,7 +700,7 @@ redo:
         memddstat = inode_meta_from_cache(fi->fh);
         if ( size <= BLKSIZE ) {
              done = done + size;
-        } else done=done+BLKSIZE;
+        } else done=done + BLKSIZE;
         LDEBUG("lessfs_read : sparse block %llu-%llu offset %llu size %llu",\
                 fi->fh,blocknr,(unsigned long long) offset,(unsigned long long) size);
         memddstatfree(memddstat);
@@ -719,9 +723,12 @@ static int lessfs_write(const char *path, const char *buf, size_t size,
                         off_t offset, struct fuse_file_info *fi)
 {
     unsigned long long blocknr;
+	off_t offsetfile;
     unsigned int offsetblock;
     DBT *blocktiger;
     DBT *data;
+	OFFHASH offHash;
+	BLKCACHE *blk;
     size_t bsize;
     size_t done = 0;
     int res;
@@ -732,13 +739,10 @@ static int lessfs_write(const char *path, const char *buf, size_t size,
 		path, (unsigned long long)size, (unsigned long long)offset);
     tiger_lock();
     bsize = size;
-    //blocknr = offset / BLKSIZE;
-    blocknr = 0;
-    while(1){
-		
-    }
+    blocknr = offset / BLKSIZE;
 
     offsetblock = offset - (blocknr * BLKSIZE);
+	offsetfile = offset - offsetblock;
     if ((offsetblock + bsize) > BLKSIZE) {
         bsize = BLKSIZE - offsetblock;
     }
@@ -756,12 +760,12 @@ static int lessfs_write(const char *path, const char *buf, size_t size,
            fi->fh, blocknr);
     data = try_block_cache(inobno.inode, inobno.blocknr, 2);
     if (NULL != data) {
-
-        memcpy((char *) blkdta->blockdata, data->data, data->size);
+		blk= (BLKCACHE *)(data->data);
+        memcpy((char *) blkdta->blockdata, blk->blockdata, strlen(blk->blockdata));
         memcpy((char *) blkdta->blockdata + offsetblock, buf + done,
                bsize);
         add_blk_to_cache(inobno.inode, inobno.blocknr,
-                         (unsigned char *) blkdta->blockdata);
+                         (unsigned char *) blkdta->blockdata, offsetfile);
         update_filesize(inobno.inode, bsize, offsetblock, blocknr, 0, 0,
                         0);
         DBTfree(data);
@@ -771,15 +775,15 @@ static int lessfs_write(const char *path, const char *buf, size_t size,
     if (2 != res) {
         blocktiger = check_block_exists(inobno);
         if (NULL != blocktiger) {
-            LDEBUG
-                ("lessfs_write -> update_block : inode %llu blocknr %llu",
+            LDEBUG("lessfs_write -> update_block : inode %llu blocknr %llu",
                  fi->fh, blocknr);
+			&offHash = (OFFHASH *)(blocktiger->data);
             if (NULL != config->blockdatabs) {
                 db_update_block(buf + done, blocknr, offsetblock, bsize,
-                                blkdta->inode, blocktiger->data);
+                                blkdta->inode, &offHash.stiger, offsetfile);
             } else {
                 file_update_block(buf + done, blocknr, offsetblock, bsize,
-                                  blkdta->inode, blocktiger->data);
+                                  blkdta->inode, &offHash.stiger, offsetfile);
             }
             DBTfree(blocktiger);
             release_global_lock();
@@ -790,6 +794,7 @@ static int lessfs_write(const char *path, const char *buf, size_t size,
             blkdta->blocknr = blocknr;
             blkdta->offsetblock = offsetblock;
             blkdta->bsize = bsize;
+			blkdta->offsetfile = offsetfile;
             blkdta->buf=(unsigned char *)buf+done;
             if (1 == res) {
                 blkdta->sparse = 1;
@@ -808,6 +813,7 @@ static int lessfs_write(const char *path, const char *buf, size_t size,
     if (done < size) {
         blocknr++;
         offsetblock = 0;
+		offsetfile += BLKSIZE;
         goto wagain;
     }
     release_tiger_lock();
@@ -816,12 +822,15 @@ static int lessfs_write(const char *path, const char *buf, size_t size,
     return (done);
 }
 
-static int slide_block_dedup()
+static int slide_block_dedup(const char *path, const char *buf, size_t size,
+                        off_t offset, struct fuse_file_info *fi)
 {
 	unsigned long long blocknr;
+	unsigned long long offsetfile;
     unsigned int offsetblock;
     DBT *blocktiger;
     DBT *data;
+	OFFFILEHASH *offfilehash;
     size_t bsize;
     size_t done = 0;
     int res;
@@ -832,7 +841,22 @@ static int slide_block_dedup()
 		path, (unsigned long long)size, (unsigned long long)offset);
     tiger_lock();
     bsize = size;
-    blocknr = offset / BLKSIZE;
+	blocknr = 0;
+	inobno.inode = fi->fh;
+	while (1){
+		inobno.blocknr = blocknr;
+		data = check_block_exists(inobno);
+		if (data == NULL){
+			break;
+		}
+		offfilehash = (OFFHASH *)(data->data);
+		if (offfilehash > offset){
+			blocknr--;	
+			break;
+		}
+		blocknr++;
+	}
+    //blocknr = offset / BLKSIZE;
 
     offsetblock = offset - (blocknr * BLKSIZE);
     if ((offsetblock + bsize) > BLKSIZE) {
@@ -1534,6 +1558,7 @@ void *init_worker(void *arg)
         worker_lock();
 
         memcpy((char *) tdta[count]->blockdata, blkdta->buf, blkdta->bsize);
+		memcpy(&tdta[count]->offsetfile, &blkdta->offsetfile, sizeof(off_t));
         memcpy(&tdta[count]->bsize, &blkdta->bsize, sizeof(size_t));
         tdta[count]->inode = blkdta->inode;
         memcpy(&tdta[count]->blocknr, &blkdta->blocknr,

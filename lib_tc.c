@@ -736,6 +736,32 @@ DBT *create_ddbuf(struct stat stbuf, char *filename)
 }
 
 /*
+ * use file offset and hash to create a struct DBT
+ */
+DBT *create_offhashbuf(OFFHASH *offhash)
+{
+    DBT *ddbuf;
+    int len;
+#ifdef ENABLE_CRYPTO
+    DBT *encrypted;
+#endif
+
+    FUNC;
+    LINFO("%s: offsetfile = %llu, hashstr = %s", __FUNCTION__, offhash->offsetfile, 
+		offhash->stiger);
+    len = sizeof(off_t) + config->hashlen + 1;
+
+    ddbuf = s_malloc(sizeof(DBT));
+    ddbuf->size = len;
+    ddbuf->data = s_malloc(ddbuf->size);
+    memcpy(ddbuf->data, offhash->offsetfile, sizeof(off_t));
+    memcpy(ddbuf->data + sizeof(off_t), (char *) offhash->stiger,
+               config->hashlen + 1);
+    EFUNC;
+    return ddbuf;
+}
+
+/*
  * use the struct memddstat to create a struct DBT, which will be written to dbcache as the value
  * the key of the entry will be the inode
  */
@@ -786,6 +812,25 @@ DDSTAT *value_to_ddstat(DBT * vddstat)
 #endif
     EFUNC;
     return ddbuf;
+}
+
+/*
+ * convert the struct DBT to struct offhash
+ */
+OFFHASH *offhashbuf_to_offhash(DBT * offhashbuf)
+{
+    OFFHASH *offhash;
+    int strlen;
+    DBT *decrypted;
+
+    FUNC;
+    strlen = offhashbuf->size - sizeof(off_t);
+    offhash = s_malloc(sizeof(OFFHASH));
+    memcpy(offhash->offsetfile, offhashbuf->data, sizeof(off_t));
+    memcpy(offhash->stiger, offhashbuf->data + sizeof(off_t), strlen);
+    LDEBUG("%s : return %s", __FUNCTION__, offhash->stiger);
+    EFUNC;
+    return offhash;
 }
 
 /*
@@ -1086,6 +1131,50 @@ int get_realsize_fromcache(unsigned long long inode, struct stat *stbuf)
 }
 
 /*
+ * return the blocknr at the position of offset
+ */
+unsigned long long get_blocknr(unsigned long long inode, off_t offset)
+{
+	unsigned long long blocknr = 0;
+	off_t offsetFile;
+	OFFHASH offHash;
+	INOBNO inobno;
+	DBT *data;
+
+	inobno.inode = inobno;
+	while (1){
+		inobno.blocknr = blocknr;
+		data = check_block_exists(inobno);
+		if (data == NULL){
+			return blocknr;
+		}
+		memcpy(&offHash, data->data, data->size);
+		if (offHash.offsetfile = offset){
+			return blocknr;
+		}
+		else if (offHash.offsetfile > offset){
+			return --blocknr;
+		}
+		blocknr++;
+	}
+}
+
+/*
+ * return the offset file and block hash of inobno
+ */
+OFFHASH get_offhash(unsigned long long inode, unsigned long long blocknr)
+{
+	INOBNO inobno;
+	OFFHASH offHash;
+	DBT *data;
+	inobno.inode = inode;
+	inobno.blocknr = blocknr;
+	data = check_block_exists(inobno);
+	memcpy(&offHash, data->data, data->size);
+	return offHash;
+}
+
+/*
  * search the dbdirent for the stat info of a file or dir, 
  * get the stat of the file or dir
  */
@@ -1212,6 +1301,7 @@ unsigned long long readBlock(unsigned long long blocknr,
     unsigned char *dtiger=NULL;
     compr *uncompdata = NULL;
     INOBNO inobno;
+	OFFHASH offHash;
     BLKCACHE *blk;
 #ifndef SHA3
     word64 res[3];
@@ -1235,7 +1325,8 @@ unsigned long long readBlock(unsigned long long blocknr,
 	//find block in dbb and blkcache, actually the blkcache has been checked before
     tdata = check_block_exists(inobno);
     if (NULL == tdata) return (0);
-    stiger=tdata->data;
+	&offHash = (OFFHASH *)(tdata->data);
+    stiger = &offHash.stiger;
 // First try the cache
     get_moddb_lock();
     decrypted = search_memhash(dbdtaq, stiger, config->hashlen);
@@ -1421,17 +1512,16 @@ void update_inuse(unsigned char *hashdata,
  * or an old one should be replaced.
  * make sure the queue of dbb is not full, and add the new dbb entry to the queue
  */
-void write_dbb_to_cache(INOBNO *inobno,unsigned char *stiger)
+void write_dbb_to_cache(INOBNO *inobno, OFFHASH *offHash)
 {
     LINFO("%s: inode=%llu, blocknr=%llu, hash=%s", __FUNCTION__, 
-		inobno->inode, inobno->blocknr, stiger);
+		inobno->inode, inobno->blocknr, offfilehash->stiger);
     if ( dbb_qcount > METAQSIZE ) {
          sync_flush_dbb();
     }
     get_dbb_lock();
-      mbin_write_dbdata(dbbm, inobno, sizeof(INOBNO), stiger,
-                       config->hashlen);
-      dbb_qcount++;
+    mbin_write_dbdata(dbbm, inobno, sizeof(INOBNO), offHash, sizeof(OFFHASH));
+    dbb_qcount++;
     release_dbb_lock();
 }
 
@@ -1771,6 +1861,7 @@ void addBlock(BLKDTA * blkdta)
     unsigned long long inuse;
     INOBNO inobno;
     DBT *cachedata = NULL;
+	OFFHASH offHash;
 
     inobno.inode = blkdta->inode;
     inobno.blocknr = blkdta->blocknr;
@@ -1785,7 +1876,7 @@ void addBlock(BLKDTA * blkdta)
         if (cachedata)
             DBTfree(cachedata);
         add_blk_to_cache(blkdta->inode, blkdta->blocknr,
-                         blkdta->blockfiller);
+                         blkdta->blockfiller, blkdta->offsetfile);
         LDEBUG
             ("addBlock : wrote with add_blk_to_cache  : inode %llu - %llu size %i",
              inobno.inode, inobno.blocknr, blkdta->bsize);
@@ -1793,6 +1884,9 @@ void addBlock(BLKDTA * blkdta)
                         blkdta->blocknr, blkdta->sparse, 0, 0);
         return;
     }
+
+	offHash.offsetfile = blkdta->offsetfile;
+	memcpy(&offHash.stiger, blkdta->stiger, config->hashlen);
 
     inuse = getInUse(blkdta->stiger);
     if (inuse == 0) {
@@ -1821,7 +1915,7 @@ void addBlock(BLKDTA * blkdta)
         comprfree(blkdta->compressed);
     inuse++;
     update_inuse(blkdta->stiger, inuse);
-    write_dbb_to_cache(&inobno,blkdta->stiger);
+    write_dbb_to_cache(&inobno, &offHash);
     return;
 }
 
@@ -2124,10 +2218,11 @@ void delete_data_cache_or_db(unsigned char *chksum,
  * delete = 0 Do not delete dbdta 
  */
 unsigned int db_commit_block(unsigned char *dbdata, unsigned char *chksum,
-                             INOBNO inobno, bool delete)
+                             INOBNO inobno, bool delete, off_t offsetFile)
 {
     unsigned char *stiger=NULL;
     compr *compressed;
+	OFFHASH offHash;
     unsigned long long inuse;
     unsigned int ret = 0;
 #ifndef SHA3 
@@ -2144,6 +2239,8 @@ unsigned int db_commit_block(unsigned char *dbdata, unsigned char *chksum,
     binhash(dbdata, BLKSIZE, res);
     stiger=(unsigned char *)&res;
 #endif
+	offHash.offsetfile = offsetFile;
+	memcpy(&offHash.stiger, stiger, config->hashlen);
 //compress the block
 #ifdef LZO
     compressed = lzo_compress((unsigned char *) dbdata, BLKSIZE);
@@ -2160,7 +2257,7 @@ unsigned int db_commit_block(unsigned char *dbdata, unsigned char *chksum,
     inuse++;
     update_inuse(stiger, inuse);
     comprfree(compressed);
-    write_dbb_to_cache(&inobno,stiger);
+    write_dbb_to_cache(&inobno, &offHash);
 #ifdef SHA3
     free(stiger);
 #endif
@@ -2171,13 +2268,14 @@ unsigned int db_commit_block(unsigned char *dbdata, unsigned char *chksum,
  * add block to the block cache, wait for updating or move to dbdtaq
  */
 void add_blk_to_cache(unsigned long long inode, unsigned long long blocknr,
-                      unsigned char *data)
+                      unsigned char *data, off_t offsetfile)
 {
     BLKCACHE blk;
 
     FUNC;
     LINFO("%s: inode=%llu, blocknr=%llu", __FUNCTION__, inode, blocknr);
     blk.blocknr = blocknr;
+	blk.offsetfile = offsetfile;
     memcpy(&blk.blockdata, data, BLKSIZE);
     mbin_write_dbdata(blkcache, &inode, sizeof(unsigned long long),
                       (void *) &blk, sizeof(BLKCACHE));
@@ -2198,6 +2296,7 @@ DBT *try_block_cache(unsigned long long inode, unsigned long long blocknr,
     DBT *tigerdata = NULL;
     INOBNO inobno;
     BLKCACHE *blk;
+	OFFHASH offHash;
 
     FUNC;
     LINFO("%s: inode=%llu, blocknr=%llu, mode=%d", __FUNCTION__, inode, blocknr,
@@ -2207,9 +2306,9 @@ DBT *try_block_cache(unsigned long long inode, unsigned long long blocknr,
         blk = (BLKCACHE *) data->data;
         if ((blocknr == blk->blocknr) && (mode != 1)) {
             retdata = s_malloc(sizeof(DBT));
-            retdata->size = BLKSIZE;
-            retdata->data = s_malloc(BLKSIZE);
-            memcpy(retdata->data, blk->blockdata, BLKSIZE);
+            retdata->size = sizeof(BLKCACHE);
+            retdata->data = s_malloc(retdata->size);
+            memcpy(retdata->data, blk, retdata->size);
         } else {
 			//didn't get the block of same block number
 			//so this previous block number should be flushed
@@ -2223,18 +2322,20 @@ DBT *try_block_cache(unsigned long long inode, unsigned long long blocknr,
             if (mode == 2) {
 				//block does not exist, write it
                 if (NULL != config->blockdatabs) {
-                    db_commit_block(blk->blockdata, NULL, inobno, 0);
+                    db_commit_block(blk->blockdata, NULL, inobno, 0, 
+						blk->offsetfile);
                 } else {
-                    file_commit_block(blk->blockdata, NULL, inobno, 0);
+                    file_commit_block(blk->blockdata, NULL, inobno, 0, 
+						blk->offsetfile);
                 }
             } else {
             	//block exists, update it
                 if (NULL != config->blockdatabs) {
-                    db_commit_block(blk->blockdata, tigerdata->data,
-                                    inobno, 1);
+                    db_commit_block(blk->blockdata, tigerdata->data, inobno, 1, 
+						blk->offsetfile);
                 } else {
-                    file_commit_block(blk->blockdata, tigerdata->data,
-                                      inobno, 1);
+                    file_commit_block(blk->blockdata, tigerdata->data, inobno, 1, 
+						blk->offsetfile);
                 }
             }
             if (NULL != tigerdata)
@@ -2252,9 +2353,9 @@ DBT *try_block_cache(unsigned long long inode, unsigned long long blocknr,
  * delete old record in dbdtaq or dbdta or blkcache, and add new block into blkcache
  */
 void db_update_block(const char *blockdata, unsigned long long blocknr,
-                     unsigned int offsetblock,
-                     unsigned long long size, unsigned long long inode,
-                     unsigned char *chksum)
+                     unsigned int offsetblock, unsigned long long size, 
+                     unsigned long long inode, unsigned char *chksum, 
+                     off_t offsetFile)
 {
     DBT *data;
     DBT *cachedata;
@@ -2285,9 +2386,10 @@ void db_update_block(const char *blockdata, unsigned long long blocknr,
     memset(dbdata, 0, BLKSIZE);
     data = try_block_cache(inode, blocknr, 0);
     if (NULL != data) {
-        memcpy(dbdata, data->data, data->size);
+		blk = (BLKCACHE *)(data->data);
+        memcpy(dbdata, blk->blockdata, strlen(blk->blockdata));
         memcpy(dbdata + offsetblock, blockdata, size);
-        add_blk_to_cache(inode, blocknr, dbdata);
+        add_blk_to_cache(inode, blocknr, dbdata, offsetFile);
         update_filesize(inode, size, offsetblock, blocknr, 0, 0, 0);
         free(dbdata);
         DBTfree(data);
@@ -2316,7 +2418,7 @@ void db_update_block(const char *blockdata, unsigned long long blocknr,
                     search_memhash(blkcache, &inobno.inode,
                                    sizeof(unsigned long long));
                 if (NULL != cachedata) {
-                    blk = (BLKCACHE *) cachedata->data;
+                    blk = (BLKCACHE *) (cachedata->data);
 #ifdef SHA3
                     dtiger=sha_binhash(blk->blockdata, BLKSIZE);
 #else
@@ -2380,7 +2482,7 @@ void db_update_block(const char *blockdata, unsigned long long blocknr,
     }
 	//if offset block > 0, this is appending.
     memcpy(dbdata + offsetblock, blockdata, size);
-    add_blk_to_cache(inode, blocknr, dbdata);
+    add_blk_to_cache(inode, blocknr, dbdata, offsetFile);
     inuse = getInUse(chksum);
     if (inuse <= 1) {
         delete_inuse(chksum);
@@ -2572,8 +2674,9 @@ DBT *check_block_exists(INOBNO inobno)
     DBT *data = NULL;
     DBT *cachedata = NULL;
     BLKCACHE *blk;
+	OFFHASH offHash;
 #ifdef SHA3
-    BitSequence *hashval;
+    unsigned char *hashval;
 #else
     word64 res[3];
 #endif
@@ -2588,22 +2691,22 @@ DBT *check_block_exists(INOBNO inobno)
     }
     release_dbb_lock();
     if (NULL == data) {
-        cachedata =
-            search_memhash(blkcache, &inobno.inode,
+        cachedata = search_memhash(blkcache, &inobno.inode,
                            sizeof(unsigned long long));
         if (cachedata != NULL) {
             blk = (BLKCACHE *) cachedata->data;
             if ((inobno.blocknr == blk->blocknr)) {
                 data = s_malloc(sizeof(DBT));
-                data->size = config->hashlen;
+                data->size = sizeof(OFFHASH);
+				offHash.offsetfile = blk->offsetfile;
 #ifdef SHA3
-                data->data=sha_binhash(blk->blockdata, BLKSIZE);
-                memcpy(data->data,&hashval,config->hashlen);
+                hashval = sha_binhash(blk->blockdata, BLKSIZE);
+                memcpy(&offHash.stiger, hashval, config->hashlen);
 #else
-                data->data=s_malloc(config->hashlen);
                 binhash(blk->blockdata, BLKSIZE, res);
-                memcpy(data->data,&res,config->hashlen);
+                memcpy(&offHash.stiger, &res, config->hashlen);
 #endif
+				memcpy(data->data, &offHash, sizeof(OFFHASH));
             } else {
                 LDEBUG("check_block_exists : %llu-%llu not found",
                        inobno.inode, inobno.blocknr);

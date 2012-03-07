@@ -37,6 +37,11 @@ typedef struct {
 } INOBNO;
 
 typedef struct {
+	off_t offsetfile;
+	unsigned char stiger[config->hashlen];
+} OFFHASH;
+
+typedef struct {
     //unsigned int snapshotnr;
     unsigned long long dirnode;
     unsigned long long inode;
@@ -58,6 +63,7 @@ typedef struct {
 } CRYPTO;
 
 typedef struct {
+	off_t offsetfile;
     unsigned long long blocknr;
     unsigned char blockdata[MAX_FUSE_BLKSIZE];
 } BLKCACHE;
@@ -76,6 +82,7 @@ typedef struct {
     compr *compressed;
     const char *blockdata;
     unsigned long long blocknr;
+	off_t offsetfile;
     unsigned int offsetblock;
     size_t bsize;
     unsigned long long inode;
