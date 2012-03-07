@@ -1165,12 +1165,12 @@ unsigned long long get_blocknr(unsigned long long inode, off_t offset)
 OFFHASH get_offhash(unsigned long long inode, unsigned long long blocknr)
 {
 	INOBNO inobno;
-	OFFHASH offHash;
+	OFFHASH offHash = NULL;
 	DBT *data;
 	inobno.inode = inode;
 	inobno.blocknr = blocknr;
-	data = check_block_exists(inobno);
-	memcpy(&offHash, data->data, data->size);
+	if (NULL != (data = check_block_exists(inobno))
+		memcpy(&offHash, data->data, data->size);
 	return offHash;
 }
 
@@ -3036,6 +3036,7 @@ void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
     unsigned char *blockdata;
     compr *uncompdata;
     INOBNO inobno;
+	OFFHASH offHash;
     DBT *data;
     DBT *encrypted;
     unsigned char *stiger;
@@ -3058,8 +3059,9 @@ void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
         LDEBUG("Deletion of non existent block.");
         return;
     }
-    stiger = s_malloc(data->size);
-    memcpy(stiger, data->data, data->size);
+	memcpy(&offHash, data->data, data->size);
+    stiger = s_malloc(config->hashlen);
+    memcpy(stiger, &offHash.stiger, strlen(&offHash.stiger));
     DBTfree(data);
     data = search_memhash(dbdtaq, stiger, config->hashlen);
     if ( NULL == data ) {
@@ -3101,7 +3103,7 @@ void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
     } else {
         memcpy(blockdata, data->data, offset);
     }
-    db_commit_block(blockdata, NULL,inobno,0);
+    db_commit_block(blockdata, NULL, inobno, 0, offHash.offsetfile);
     free(stiger);
     DBTfree(data);
     free(blockdata);
@@ -3115,6 +3117,7 @@ void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
 int db_fs_truncate(struct stat *stbuf, off_t size, char *bname)
 {
     unsigned int offsetblock;
+	unsigned long long inode;
     unsigned long long blocknr;
     unsigned long long lastblocknr;
     unsigned long long inuse;
@@ -3122,6 +3125,8 @@ int db_fs_truncate(struct stat *stbuf, off_t size, char *bname)
     off_t oldsize;
     DBT *data;
     INOBNO inobno;
+	OFFHASH offHash;
+	OFFHASH oldOffHash;
     time_t thetime;
 
     FUNC;
@@ -3129,20 +3134,32 @@ int db_fs_truncate(struct stat *stbuf, off_t size, char *bname)
 		size);
     LDEBUG("lessfs_truncate inode %llu - size %llu", stbuf->st_ino, size);
     thetime = time(NULL);
-    blocknr = size / BLKSIZE;
-    offsetblock = size - (blocknr * BLKSIZE);
+	inode = stbuf->st_ino;
+    blocknr = get_blocknr(inode, size);
+
+	//if the new size is bigger, offset block does not exist
+	if (NULL != (offHash = get_offhash(inode, blocknr)))
+		offsetblock = size - offHash.offsetfile;
+	
     oldsize = stbuf->st_size;
-    lastblocknr = oldsize / BLKSIZE;
+    lastblocknr = get_blocknr(inode, oldsize);
+
+	//if the lastblocknr is out of bound, reduce it.
+	if (NULL == (oldOffHash = get_offhash(inode,unsigned long long blocknr)))
+		lastblocknr--;
+	
     // Truncate filesize.
     update_filesize_cache(stbuf, size);
     LDEBUG("lessfs_truncate : truncate new block %llu, oldblock %llu",
            blocknr, lastblocknr);
+
+	//start to delete the extra blocks
+    inobno.inode = stbuf->st_ino;
     while (lastblocknr >= blocknr) {
         if ( offsetblock != 0 && lastblocknr == blocknr ) break;
         LDEBUG
             ("lessfs_truncate : Enter loop lastblocknr %llu : blocknr %llu",
              lastblocknr, blocknr);
-        inobno.inode = stbuf->st_ino;
         inobno.blocknr = lastblocknr;
         get_dbb_lock();
         data = search_memhash(dbbm, &inobno, sizeof(INOBNO));
@@ -3161,12 +3178,17 @@ int db_fs_truncate(struct stat *stbuf, off_t size, char *bname)
 // Need to continue in case of a sparse file.
             continue;
         }
-        stiger = s_malloc(data->size);
-        memcpy(stiger, data->data, data->size);
+
+		//get the hash of the lastblock
+		memcpy(&oldOffHash, data->data, data->size);
+        stiger = s_malloc(config->hashlen);
+        memcpy(stiger, &oldOffHash.stiger, strlen(&oldOffHash.stiger));
         LDEBUG("lessfs_truncate Search to delete blocknr %llu:",
                lastblocknr);
         loghash("lessfs_truncate tiger :", stiger);
         DBTfree(data);
+
+		//delete the lastblock
         inuse = getInUse(stiger);
         if (inuse == 1) {
             sync_flush_dtaq();
@@ -3179,6 +3201,8 @@ int db_fs_truncate(struct stat *stbuf, off_t size, char *bname)
             update_inuse(stiger, inuse);
         }
         delete_dbb(&inobno);
+
+		//reduce the lastblocknr to delete the new lastblock
         if (lastblocknr > 0)
             lastblocknr--;
         free(stiger);
