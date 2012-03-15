@@ -43,7 +43,9 @@ int r_env_cfg(char *configfile)
 
     config = s_fopen(configfile, "r");
     while (1) {
-        fgets(buf, 1023, config);
+        if (NULL == fgets(buf, 1023, config)){
+			break;
+        }
         if (feof(config))
             break;
         if (0 != unrem(buf)) {

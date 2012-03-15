@@ -653,10 +653,14 @@ void lessfsck_tc()
 
 void lessfsck_file_io()
 {
+	int ERRNO;
     common_check();
     if ( nextoffset > detected_size ) {
-       printf("%cFree %llu orphaned bytes.\n",BACKSPACE,nextoffset-detected_size);
-       ftruncate(fdbdta, detected_size);
+       	printf("%cFree %llu orphaned bytes.\n",BACKSPACE,nextoffset-detected_size);
+       	if (0 != (ERRNO = ftruncate(fdbdta, detected_size))){
+			LFATAL("%s: failed to truncate file - errno=%d", __FUNCTION__, ERRNO);
+			die_syserr();
+       	}
     }
 }
 

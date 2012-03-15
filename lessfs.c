@@ -169,7 +169,7 @@ void printTimeStamp(struct timeval start, const char *func)
 	struct timeval end;
 	float timeSpan;
 
-	end = gettimeofday();
+	gettimeofday(&end, 0);
 	timeSpan = 1000000 * (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec);
 	timeSpan /= 1000000;
 	LDEBUG("%s: time use=%f", func, timeSpan);
@@ -811,7 +811,6 @@ static int lessfs_write(const char *path, const char *buf, size_t size,
         release_global_lock();
     done = done + bsize;
     bsize = (size - done) > BLKSIZE? BLKSIZE : size - done;
-	printf("%s: bsize = %llu", __FUNCTION__, bsize);
     if (done < size) {
         blocknr++;
         offsetblock = 0;
@@ -1770,101 +1769,6 @@ int verify_kernel_version()
         begin = end;
     }
     return (0);
-}
-
-int OpenDB(char *confPath)
-{
-    LINFO("%s", __FUNCTION__);
-	if (-1 == r_env_cfg(confPath))
-		return -1;
-	parseconfig(0);
-	lessfs_init();
-	return 0;
-}
-
-int CloseDB()
-{
-    LINFO("%s", __FUNCTION__);
-	lessfs_destroy(NULL);
-	return 0;
-}
-
-int BackUpWrite(char *content, char *path, long filesize)
-{
-	struct fuse_file_info * fi;
-	
-	fi = malloc(sizeof(struct fuse_file_info));
-	fi->fh=get_inode(path);
-	lessfs_open(path, fi);
-    lessfs_write(NULL, content, filesize, 0, fi);
-	lessfs_release(path, fi);
-	return 0;
-}
-
-int BackUpMeta(char *path)
-{
-	lessfs_mknod(path, 0755 | S_IFREG, 0);
-	return 0;
-}
-
-int BackUp(char *content, char *filename, long filesize)
-{
-	char *path = (char *)malloc(strlen(filename) + 1);
-	strcpy(path, "/");
-	strcpy(path + 1, filename);
-	if (0 != BackUpMeta(path))
-		return -1;
-	if (0 != BackUpWrite(content, path, filesize))
-		return -1;
-	return 0;
-}
-
-int FillDir(void *buf, const char *name, const struct stat *stbuf, off_t off)
-{
-	FILEINFO *tail;
-	char *date = ctime(&stbuf->st_ctime);
-	FILEINFO *file = (FILEINFO *)s_malloc(sizeof(FILEINFO));
-	file->filename = (char *)s_malloc(strlen(name));
-	strcpy(file->filename, name);
-	file->date = (char *)s_malloc(strlen(date));
-	strcpy(file->date, date);
-	file->next = NULL;
-	tail = (FILEINFO *)buf;
-	while (tail->next != NULL)
-	{
-		tail = tail->next;
-	}
-	tail->next = file;
-	
-	return 0;
-}
-
-int ShowFiles(FILEINFO *buf, char *path)
-{
-	lessfs_readdir(path, (void *)buf, FillDir, 0, NULL);
-	return 0;
-}
-
-char *ReadFile(unsigned long long *size, char *path)
-{
-	struct fuse_file_info * fi;
-	struct stat stbuf;
-	char *buf;
-	
-	fi = malloc(sizeof(struct fuse_file_info));
-	fi->fh = get_inode(path);
-	if(fi->fh == 0)
-		return NULL;
-	lessfs_open(path, fi);
-	if(get_realsize_fromcache(fi->fh, &stbuf) == 0)
-		return NULL;
-	*size = stbuf.st_size;
-	printf("%s: filesize is %llu", __FUNCTION__, *size);
-	buf = (char *)s_malloc(*size);
-    lessfs_read(path, buf, *size, 0, fi);
-	printf("%s: bufsize is %d", __FUNCTION__, strlen(buf));
-	lessfs_release(path, fi);
-	return buf;
 }
 
 int main(int argc, char *argv[])
