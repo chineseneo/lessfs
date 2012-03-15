@@ -162,6 +162,20 @@ void dbsync()
 }
 
 /*
+ * print the time use
+ */
+void printTimeStamp(struct timeval start, const char *func)
+{
+	struct timeval end;
+	float timeSpan;
+
+	end = gettimeofday();
+	timeSpan = 1000000 * (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec);
+	timeSpan /= 1000000;
+	LDEBUG("%s: time use=%f", func, timeSpan);
+}
+
+/*
  * search in the database for path and get the stat of the file or dir
  *
  */
