@@ -96,7 +96,6 @@ compr *lzo_compress(unsigned char *buf, int buflen)
     }
     /* check for an incompressible block */
     if (out_len >= buflen) {
-        // LINFO("This block contains incompressible data.\n");
         retdata->data = s_malloc(buflen);
         memcpy(retdata->data, buf, buflen);
         retdata->size = buflen;

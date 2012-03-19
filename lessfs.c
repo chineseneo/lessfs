@@ -122,7 +122,6 @@ int check_path_sanity(const char *path)
     int retcode = 0;
 
     FUNC;
-    //LINFO("%s: path = %s", __FUNCTION__, path);
 
     name = s_strdup((char *) path);
     p = name;
@@ -149,7 +148,6 @@ int check_path_sanity(const char *path)
 
 void dbsync()
 {
-    LINFO("%s", __FUNCTION__);
     tcbdbsync(dbdirent);
     tchdbsync(dbu);
     tchdbsync(dbb);
@@ -200,7 +198,7 @@ getattrwait:
         }
     }
     res = dbstat(path, stbuf);
-    LINFO("%s: file=%s inode=%llu", __FUNCTION__, path, stbuf->st_ino);
+    LDEBUG("%s: file=%s inode=%llu", __FUNCTION__, path, stbuf->st_ino);
     LDEBUG("lessfs_getattr : st_nlinks=%u", stbuf->st_nlink);
     LDEBUG("lessfs_getattr : %s size %llu : result %i",path,
            (unsigned long long) stbuf->st_size, res);
@@ -217,7 +215,6 @@ static int lessfs_access(const char *path, int mask)
 {
     int res = 0;
     FUNC;
-    LINFO("%s: path = %s", __FUNCTION__, path);
 // Empty stub
     return (res);
 }
@@ -232,9 +229,8 @@ static int lessfs_readlink(const char *path, char *buf, size_t size)
 
     FUNC;
 
-    LINFO("%s: path = %s, size = %llu", __FUNCTION__, path, (unsigned long long)size);
-
-    LDEBUG("lessfs_readlink : size = %i", (int) size);
+    LDEBUG("%s: path = %s, size = %llu", __FUNCTION__, path, 
+		(unsigned long long)size);
     get_global_lock();
     res = fs_readlink(path, buf, size);
     release_global_lock();
@@ -247,7 +243,7 @@ static int lessfs_readdir(const char *path, void *buf,
                           struct fuse_file_info *fi)
 {
     int retcode;
-    LINFO("%s: path = %s, offset = %llu", __FUNCTION__, path, (unsigned long long)offset);
+    LDEBUG("%s: path = %s, offset = %llu", __FUNCTION__, path, (unsigned long long)offset);
     get_global_lock();
     retcode = fs_readdir(path, buf, filler, offset, fi);
     release_global_lock();
@@ -262,7 +258,7 @@ static int lessfs_mknod(const char *path, mode_t mode, dev_t rdev)
     time_t thetime;
 
     FUNC;
-    LINFO("%s: path = %s", __FUNCTION__, path);
+    LDEBUG("%s: path = %s", __FUNCTION__, path);
     get_global_lock();
     thetime = time(NULL);
     dname = s_dirname((char *) path);
@@ -285,7 +281,7 @@ static int lessfs_mknod(const char *path, mode_t mode, dev_t rdev)
 static int lessfs_mkdir(const char *path, mode_t mode)
 {
     int ret;
-    LINFO("%s: path = %s", __FUNCTION__, path);
+    LDEBUG("%s: path = %s", __FUNCTION__, path);
     get_global_lock();
     ret = fs_mkdir(path, mode);
     release_global_lock();
@@ -296,7 +292,7 @@ static int lessfs_unlink(const char *path)
 {
     int res;
     FUNC;
-    LINFO("%s: path = %s", __FUNCTION__, path);
+    LDEBUG("%s: path = %s", __FUNCTION__, path);
     get_global_lock();
     sync_flush_dtaq();
     sync_flush_dbu();
@@ -315,7 +311,7 @@ static int lessfs_unlink(const char *path)
 static int lessfs_rmdir(const char *path)
 {
     int res;
-    LINFO("%s: path = %s", __FUNCTION__, path);
+    LDEBUG("%s: path = %s", __FUNCTION__, path);
     get_global_lock();
     res = fs_rmdir(path);
     release_global_lock();
@@ -328,7 +324,7 @@ static int lessfs_symlink(const char *from, const char *to)
     int res = 0;
 
     FUNC;
-    LINFO("%s: from = %s, to = %s", __FUNCTION__, from, to);
+    LDEBUG("%s: from = %s, to = %s", __FUNCTION__, from, to);
     get_global_lock();
     res = fs_symlink((char *) from, (char *) to);
     release_global_lock();
@@ -341,7 +337,7 @@ static int lessfs_rename(const char *from, const char *to)
     struct stat stbuf;
 
     FUNC;
-    LINFO("%s: from = %s, to = %s", __FUNCTION__, from, to);
+    LDEBUG("%s: from = %s, to = %s", __FUNCTION__, from, to);
     LDEBUG("lessfs_rename : from %s , to %s", from, to);
     get_global_lock();
     res = dbstat(from, &stbuf);
@@ -366,7 +362,7 @@ static int lessfs_link(const char *from, const char *to)
     int res = 0;
 
     FUNC;
-    LINFO("%s: from = %s, to = %s", __FUNCTION__, from, to);
+    LDEBUG("%s: from = %s, to = %s", __FUNCTION__, from, to);
     get_global_lock();
     res = fs_link((char *) from, (char *) to);
     release_global_lock();
@@ -388,8 +384,7 @@ static int lessfs_chmod(const char *path, mode_t mode)
     DBT *ddbuf;
 
     FUNC;
-    LINFO("%s: path = %s", __FUNCTION__, path);
-    LDEBUG("lessfs_chmod : %s", path);
+    LDEBUG("%s: path = %s", __FUNCTION__, path);
     get_global_lock();
     thetime = time(NULL);
     res = dbstat(path, &stbuf);
@@ -433,7 +428,6 @@ static int lessfs_chown(const char *path, uid_t uid, gid_t gid)
     DBT *ddbuf;
 
     FUNC;
-    LINFO("%s: path = %s", __FUNCTION__, path);
     get_global_lock();
     thetime = time(NULL);
     res = dbstat(path, &stbuf);
@@ -526,7 +520,6 @@ static int lessfs_utimens(const char *path, const struct timespec ts[2])
     MEMDDSTAT *memddstat;
 
     FUNC;
-    LINFO("%s: path = %s", __FUNCTION__, path);
     get_global_lock();
     res = dbstat(path, &stbuf);
     if ( res != 0 ) {
@@ -592,7 +585,6 @@ static int lessfs_open(const char *path, struct fuse_file_info *fi)
     int res = 0;
 
     FUNC;
-    LINFO("%s: path = %s", __FUNCTION__, path);
     LDEBUG("lessfs_open : %s strlen %i : uid %u", path,
            strlen((char *) path), fuse_get_context()->uid);
 
@@ -822,7 +814,6 @@ static int lessfs_statfs(const char *path, struct statvfs *stbuf)
 {
     int res;
     char *blockdatadir;
-    LINFO("%s: path = %s", __FUNCTION__, path);
 
     if (NULL != config->blockdatabs) {
         res = statvfs(config->blockdata, stbuf);
@@ -908,7 +899,6 @@ static int lessfs_fsync(const char *path, int isdatasync,
     FUNC;
     (void) path;
     (void) isdatasync;
-    LINFO("%s: path = %s", __FUNCTION__, path);
     open_lock();
     wait_io_pending(fi->fh);
     /* Living on the edge, wait for pending I/O but do not flush the caches. */
@@ -936,7 +926,6 @@ static int lessfs_fsync(const char *path, int isdatasync,
 static void lessfs_destroy(void *unused __attribute__ ((unused)))
 {
     FUNC;
-    LINFO("%s", __FUNCTION__);
     sync_flush_dbu();
     sync_flush_dbb();
     clear_dirty();
@@ -984,7 +973,6 @@ void freeze_nospace(char *dbpath)
     LFATAL
         ("Filesystem for database %s has insufficient space to continue, freezing I/O",
          dbpath);
-    LINFO("%s: dbpath = %s", __FUNCTION__, dbpath);
     get_global_lock();
     sync_flush_dbu();
     sync_flush_dbb();
@@ -1009,7 +997,6 @@ void *flush_dbu_worker(void *arg)
 {
    int sleeptime=config->flushtime;
    int done;
-   LINFO("%s start", __FUNCTION__);
    while(1)
    {
       LDEBUG("flush_dbu_worker : call sync_flush_dbu"); 
@@ -1027,7 +1014,6 @@ void *flush_dbb_worker(void *arg)
 {
    int sleeptime=config->flushtime;
    int done;
-   LINFO("%s start", __FUNCTION__);
    while(1)
    {
       LDEBUG("flush_dbb_worker : call sync_flush_dbb"); 
@@ -1048,7 +1034,7 @@ void *flush_dbb_worker(void *arg)
 void *housekeeping_worker(void *arg)
 {
     char *dbpath;
-    LINFO("%s: inspectdiskinterval = %d", __FUNCTION__, config->inspectdiskinterval);
+    LDEBUG("%s: inspectdiskinterval = %d", __FUNCTION__, config->inspectdiskinterval);
 
     while (1) {
         dbpath = as_sprintf("%s/fileblock.tch", config->fileblock);
@@ -1245,7 +1231,6 @@ void *ioctl_worker(void *arg)
     bool isfrozen = 0;
 
     msocket = -1;
-    LINFO("%s start", __FUNCTION__);
     while (1) {
         addr = getenv("LISTEN_IP");
         port = getenv("LISTEN_PORT");
@@ -1370,7 +1355,6 @@ void *ioctl_worker(void *arg)
 
 void *init_data_writer(void *arg)
 {
-    LINFO("%s start", __FUNCTION__);
     get_qempty_lock();
     while (1) {
         get_qdta_lock();
@@ -1386,7 +1370,6 @@ void *init_data_writer(void *arg)
 // Flush data every flushtime seconds.
 void *lessfs_flush(void *arg)
 {
-    LINFO("%s start", __FUNCTION__);
     while (1) {
         sleep(config->flushtime);
         LDEBUG("lessfs_flush: flush_dta_queue");
@@ -1418,7 +1401,6 @@ void *init_worker(void *arg)
 
 
     memcpy(&count, arg, sizeof(int));
-    LINFO("%s: arg = %d", __FUNCTION__, count);
     get_global_lock();
     if (NULL == tdta) {
         tdta = malloc(max_threads * sizeof(BLKDTA));
@@ -1507,7 +1489,6 @@ void mark_dirty()
 #ifndef SHA3
     word64 res[3];
 #endif
-    LINFO("%s start", __FUNCTION__);
 
     brand=as_sprintf("LESSFS_DIRTY");
 #ifdef SHA3
@@ -1547,7 +1528,6 @@ int check_dirty()
     word64 res[3];
 #endif
 
-    LINFO("%s start", __FUNCTION__);
 
     brand=as_sprintf("LESSFS_DIRTY");
 #ifdef SHA3
@@ -1578,7 +1558,6 @@ void check_blocksize()
     int blksize;
 
     blksize=get_blocksize();
-    LINFO("%s: blocksize = %d", __FUNCTION__, blksize);
     if ( blksize != BLKSIZE ) die_dataerr("Not allowed to mount lessfs with blocksize %u when previously used with blocksize %i",BLKSIZE,blksize);
     return;
 }
@@ -1594,7 +1573,6 @@ static void *lessfs_init()
     unsigned char *stiger;
     char *hashstr;
     INUSE *inuse;
-    LINFO("%s start", __FUNCTION__);
 
     pthread_spin_init(&moddb_spinlock, 0);
     pthread_spin_init(&dbu_spinlock, 0);

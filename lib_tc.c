@@ -136,7 +136,6 @@ void logiv(char *msg, unsigned char *bhash)
     int n;
     char *p1, *p2;
 
-    LINFO("%s: msg = %s", __FUNCTION__, msg);
 
     for (n = 0; n < 8; n++) {
         p1 = as_sprintf("%02X", bhash[n]);
@@ -190,9 +189,6 @@ void log_fatal_hash(char *msg, unsigned char *bhash)
     int n;
     char *p1, *p2;
 
-    LINFO("%s: msg = %s", __FUNCTION__, msg);
-
-
     for (n = 0; n < config->hashlen ; n++) {
         p1 = as_sprintf("%02X", bhash[n]);
         if (n == 0) {
@@ -241,30 +237,29 @@ TCHDB *hashdb_open(char *dbpath, int cacherow,
 
 void tc_defrag()
 {
-    LINFO("%s start", __FUNCTION__);
     sync_flush_dtaq();
     if (!tchdboptimize(dbb, atol(config->fileblockbs), 0, 0, HDBTLARGE))
-        LINFO("fileblock.tch not optimized");
+        LDEBUG("fileblock.tch not optimized");
     if (!tchdboptimize(dbu, atol(config->blockusagebs), 0, 0, HDBTLARGE))
-        LINFO("blockusage.tch not optimized");
+        LDEBUG("blockusage.tch not optimized");
     if (!tchdboptimize(dbp, atol(config->metabs), 0, 0, HDBTLARGE))
-        LINFO("metadata.tcb not optimized");
+        LDEBUG("metadata.tcb not optimized");
     if (!tchdboptimize(dbs, atol(config->symlinkbs), 0, 0, HDBTLARGE))
-        LINFO("symlink.tch not optimized");
+        LDEBUG("symlink.tch not optimized");
     if (NULL != config->blockdatabs) {
         if (!tchdboptimize
             (dbdta, atol(config->blockdatabs), 0, 0, HDBTLARGE))
-            LINFO("blockdata.tch not optimized");
+            LDEBUG("blockdata.tch not optimized");
     } else {
         if (!tcbdboptimize(freelist, 0, 0, atol(config->freelistbs), -1, -1, BDBTLARGE))
-            LINFO("freelist.tcb not optimized");
+            LDEBUG("freelist.tcb not optimized");
     }
     if (!tcbdboptimize
         (dbdirent, 0, 0, atol(config->direntbs), -1, -1, BDBTLARGE))
-        LINFO("dirent.tcb not optimized");
+        LDEBUG("dirent.tcb not optimized");
     if (!tcbdboptimize
         (dbl, 0, 0, atol(config->hardlinkbs), -1, -1, BDBTLARGE))
-        LINFO("hardlink.tcb not optimized");
+        LDEBUG("hardlink.tcb not optimized");
 }
 
 
@@ -276,7 +271,7 @@ void tc_open(bool defrag, bool createpath)
     char *sp;
 
     FUNC;
-    LINFO("%s: defrag = %d, createpath = %d", __FUNCTION__, defrag, createpath);
+    LDEBUG("%s: defrag = %d, createpath = %d", __FUNCTION__, defrag, createpath);
     dbpath = as_sprintf("%s/fileblock.tch", config->fileblock);
     if ( createpath ) mkpath(config->fileblock,0744);
     LDEBUG("Open database %s", dbpath);
@@ -687,7 +682,7 @@ DBT *create_ddbuf(struct stat stbuf, char *filename)
 #endif
 
     FUNC;
-    LINFO("%s: filename = %s, inode=%llu", __FUNCTION__, filename, stbuf.st_ino);
+    LDEBUG("%s: filename = %s, inode=%llu", __FUNCTION__, filename, stbuf.st_ino);
     if (NULL != filename) {
         len = sizeof(struct stat) + strlen((char *) filename) + 1;
     } else
@@ -723,8 +718,8 @@ DBT *create_mem_ddbuf(MEMDDSTAT * ddstat)
 {
     DBT *ddbuf;
 
-    LINFO("%s: filename=%s, blocknr=%llu", __FUNCTION__, ddstat->filename, ddstat->blocknr);
-
+    LDEBUG("%s: filename=%s, blocknr=%llu", __FUNCTION__, ddstat->filename, 
+		ddstat->blocknr);
     ddbuf = s_malloc(sizeof(DBT));
     ddbuf->data = s_malloc(sizeof(MEMDDSTAT));
     ddbuf->size = sizeof(MEMDDSTAT);
@@ -760,7 +755,6 @@ DDSTAT *value_to_ddstat(DBT * vddstat)
     DBT *decrypted;
 
     FUNC;
-    //LINFO("%s: size of DBT=%lu", __FUNCTION__, vddstat->size);
     decrypted = vddstat;
 #ifdef ENABLE_CRYPTO
     if (config->encryptmeta && config->encryptdata) {
@@ -795,8 +789,6 @@ void dbmknod(const char *path, mode_t mode, char *linkdest, dev_t rdev)
 
 	//path = to , linkdest = from
     FUNC;
-    LINFO("%s: path=%s, linkdest=%s", __FUNCTION__, path, 
-		linkdest);
     LDEBUG("dbmknod : %s", path);
     inode = get_next_inode();
     write_file_ent(path, inode, mode, linkdest, rdev);
@@ -824,10 +816,8 @@ void write_file_ent(const char *filename, unsigned long long inode,
     bool isrootdir = 0;
 
     FUNC;
-    LINFO("%s: filename=%s, inode=%llu, linkdest=%s", __FUNCTION__, filename, 
+    LDEBUG("%s: filename=%s, inode=%llu, linkdest=%s", __FUNCTION__, filename, 
 		inode, linkdest);
-    LDEBUG("write_file_ent : filename %s, inodenumber %llu", filename,
-           inode);
     bname = s_basename((char *) filename);
     parentdir = s_dirname((char *) filename);
     if (0 == strcmp(filename, "/"))
@@ -917,7 +907,7 @@ void write_file_ent(const char *filename, unsigned long long inode,
  */
 void write_nfi(unsigned long long nextinode)
 {
-    LINFO("%s: nextinode=%llu", __FUNCTION__, nextinode);
+    LDEBUG("%s: nextinode=%llu", __FUNCTION__, nextinode);
     bin_write_dbdata(dbp, (unsigned char *) "NFI", strlen("NFI"),
                      (unsigned char *) &nextinode, sizeof(nextinode));
     return;
@@ -946,7 +936,6 @@ void formatfs()
 #endif
 
     FUNC;
-    LINFO("%s start", __FUNCTION__);
     if (NULL == dbp) {
         tc_open(0,0);
     }
@@ -1017,7 +1006,6 @@ int get_dir_inode(char *dname, struct stat *stbuf)
     unsigned long long inode = 1;
 
     FUNC;
-    //LINFO("%s: dirname=%s", __FUNCTION__, dname);
     while (1) {
         p = strchr(dname, '/');
         if (NULL == p)
@@ -1066,7 +1054,6 @@ int get_realsize_fromcache(unsigned long long inode, struct stat *stbuf)
     DBT *data;
     MEMDDSTAT *mddstat;
 
-    //LINFO("%s: inode=%llu", __FUNCTION__, inode);
     
 	//search the inode in the dbcache
     data = search_memhash(dbcache, &inode, sizeof(unsigned long long));
@@ -1228,7 +1215,7 @@ unsigned long long readBlock(unsigned long long blocknr, const char *filename,
 #endif
 
     FUNC;
-    LINFO("%s: filename=%s, inode=%llu, blocknr=%llu", __FUNCTION__, filename, 
+    LDEBUG("%s: filename=%s, inode=%llu, blocknr=%llu", __FUNCTION__, filename, 
 		inode, blocknr);
     inobno.inode = inode;
     inobno.blocknr = blocknr;
@@ -1336,11 +1323,11 @@ unsigned long long readBlock(unsigned long long blocknr, const char *filename,
  */
 void delete_inuse(unsigned char *stiger)
 {
-    LINFO("%s: hash=%s", __FUNCTION__, stiger);
-     get_dbu_lock();
+	LDEBUG("%s: hash=%s", __FUNCTION__, stiger);
+    get_dbu_lock();
         tcmdbout(dbum, stiger, config->hashlen);
         tchdbout(dbu, stiger, config->hashlen);
-     release_dbu_lock();
+    release_dbu_lock();
 }
 
 /*
@@ -1350,12 +1337,12 @@ void delete_inuse(unsigned char *stiger)
  */
 void delete_dbb(INOBNO *inobno)
 {
-    LINFO("%s: inode=%llu, blocknr=%llu", __FUNCTION__, inobno->inode, 
+    LDEBUG("%s: inode=%llu, blocknr=%llu", __FUNCTION__, inobno->inode, 
 		inobno->blocknr);
-     get_dbb_lock();
+    get_dbb_lock();
         tcmdbout(dbbm, inobno, sizeof(INOBNO));
         tchdbout(dbb, inobno, sizeof(INOBNO));
-     release_dbb_lock();
+    release_dbb_lock();
 }
 
 /*
@@ -1367,19 +1354,15 @@ unsigned long long getInUse(unsigned char *tigerstr)
     unsigned long long counter;
     DBT *data;
 
-	LINFO("%s", __FUNCTION__);
     if (NULL == tigerstr)
         return (0);
 
     get_dbu_lock();
-	LINFO("%s: search dbum", __FUNCTION__);
     data = search_memhash(dbum, tigerstr, config->hashlen);
     if ( NULL == data ) {
-		LINFO("%s: search dbu", __FUNCTION__);
         data = search_dbdata(dbu, tigerstr, config->hashlen);
     }
     if (NULL == data) {
-		LINFO("%s: data = NULL", __FUNCTION__);
         LDEBUG("getInuse nothing found return 0.");
         release_dbu_lock();
         return (0);
@@ -1387,7 +1370,7 @@ unsigned long long getInUse(unsigned char *tigerstr)
     release_dbu_lock();
     memcpy(&counter, data->data, sizeof(counter));
     DBTfree(data);
-    LINFO("%s: hash=%s inuse=%llu", __FUNCTION__, tigerstr, counter);
+    LDEBUG("%s: hash=%s inuse=%llu", __FUNCTION__, tigerstr, counter);
     return counter;
 }
 
@@ -1413,7 +1396,7 @@ void DBTfree(DBT * data)
 void update_inuse(unsigned char *hashdata, 
                  unsigned long long inuse)
 {
-    LINFO("%s: hash=%s, inuse=%llu", __FUNCTION__, hashdata, inuse);
+    LDEBUG("%s: hash=%s, inuse=%llu", __FUNCTION__, hashdata, inuse);
     if (inuse > 0) {
         if ( dbu_qcount > METAQSIZE ) {
             sync_flush_dbu();
@@ -1455,7 +1438,6 @@ void btbin_curwrite_dbdata(TCBDB * db, BDBCUR * cur, char *data,
 {
     int ecode;
     FUNC;
-    LINFO("%s: value=%s", __FUNCTION__, data);
     if (!tcbdbcurput(cur, data, datalen, BDBCPAFTER)) {
         ecode = tcbdbecode(db);
         die_dberr("tcbdbput2 failed : %s", tcbdberrmsg(ecode));
@@ -1472,7 +1454,6 @@ void btasc_write_dbdata(TCBDB * db, char *keydata, char *dataData)
 {
     int ecode;
     FUNC;
-    LINFO("%s: key=%s, value=%s", __FUNCTION__, keydata, dataData);
     if (!tcbdbputdup2(db, (char *) keydata, (char *) dataData)) {
         ecode = tcbdbecode(db);
         die_dberr("tcbdbput failed : %s", tcbdberrmsg(ecode));
@@ -1506,7 +1487,6 @@ void btasc_curwrite_dbdata(TCBDB * db, BDBCUR * cur, unsigned char *data)
 {
     int ecode;
     FUNC;
-    LINFO("%s: value=%s", __FUNCTION__, data);
 
     if (!tcbdbcurput2(cur, (const char *) data, BDBCPAFTER)) {
         ecode = tcbdbecode(db);
@@ -1582,7 +1562,6 @@ void asc_write_dbdata(TCHDB * db, unsigned char *keydata,
 {
     int ecode;
     FUNC;
-    LINFO("%s: key=%s", __FUNCTION__, keydata);
     if (!tchdbputasync
         (db, keydata, strlen((char *) keydata), dataData,
          strlen((char *) dataData))) {
@@ -1614,8 +1593,6 @@ DDSTAT *dnode_bname_to_inode(void *dinode, int dlen, char *bname)
 
 	unsigned long long key;
 	memcpy(&key, dinode, sizeof(key));
-    //LINFO("%s: find the inode of which the dirinode=%llu, filename=%s", 
-	//	__FUNCTION__, key, bname);
 	//cur==cursor
     cur = tcbdbcurnew(dbdirent);
     if (!tcbdbcurjump(cur, (char *) dinode, dlen)
@@ -1647,7 +1624,7 @@ DDSTAT *dnode_bname_to_inode(void *dinode, int dlen, char *bname)
             statdata =
                 search_dbdata(dbp, &valnode, sizeof(unsigned long long));
             if (NULL == statdata) {
-                LINFO("Unable to find file existing in dbp.\n");
+                LDEBUG("Unable to find file existing in dbp.\n");
                 free(dbvalue);
                 free(dbkey);
                 return NULL;  
@@ -1727,7 +1704,6 @@ unsigned long long get_next_inode()
     DBT *data;
     unsigned long long nextinode = 0;
     FUNC;
-    LINFO("%s", __FUNCTION__);
 
     data = search_dbdata(dbp, (unsigned char *) "NFI", strlen("NFI"));	//the next inode is named "NFI", maybe for Next Found Inode
     if (NULL != data) {
@@ -1766,7 +1742,7 @@ DBT *search_memhash(TCMDB * db, void *key, int len)
  */
 void qdta(unsigned char *stiger, DBT * data)
 {
-    LINFO("%s: hash=%s, datasize=%lu", __FUNCTION__, stiger, data->size);
+    LDEBUG("%s: hash=%s, datasize=%lu", __FUNCTION__, stiger, data->size);
     get_moddb_lock();
     loghash("qdta", stiger);
     mbin_write_dbdata(dbdtaq, stiger, config->hashlen, data->data, data->size);
@@ -1846,7 +1822,7 @@ MEMDDSTAT *inode_meta_from_cache(unsigned long long inode)
 {
     DBT *dataptr;
     MEMDDSTAT *ddstat = NULL;
-    LINFO("%s: inode=%llu", __FUNCTION__, inode);
+    LDEBUG("%s: inode=%llu", __FUNCTION__, inode);
     dataptr = search_memhash(dbcache, &inode, sizeof(unsigned long long));
     if (dataptr == NULL) {
         LDEBUG("inode %llu not found to update.", inode);
@@ -1891,7 +1867,7 @@ int update_filesize_cache(struct stat *stbuf, off_t size)
     DBT *ddbuf;
     time_t thetime;
 
-    LINFO("%s: from %llu to %llu", __FUNCTION__, stbuf->st_size, size);
+    LDEBUG("%s: from %llu to %llu", __FUNCTION__, stbuf->st_size, size);
 
     thetime = time(NULL);
     // Truncate filesize.
@@ -2073,7 +2049,7 @@ void delete_data_cache_or_db(unsigned char *chksum,
 #endif
     BLKCACHE *blk;
     unsigned char *dtiger=NULL;
-    LINFO("%s: inode=%llu, hash=%s", __FUNCTION__, inode, chksum);
+    LDEBUG("%s: inode=%llu, hash=%s", __FUNCTION__, inode, chksum);
     get_moddb_lock();
     if (!tchdbout(dbdta, chksum, config->hashlen)) {
         loghash
@@ -2267,12 +2243,8 @@ void db_update_block(const char *blockdata, unsigned long long blocknr,
 #endif
 
     FUNC;
-    LINFO("%s: inode=%llu, blocknr=%llu, offsetblock=%d, size=%llu", __FUNCTION__, inode, 
+    LDEBUG("%s: inode=%llu, blocknr=%llu, offsetblock=%d, size=%llu", __FUNCTION__, inode, 
 		blocknr, offsetblock, size);
-    LDEBUG
-        ("updateBlock : inode %llu blocknr %llu offsetblock %llu, size %llu",
-         inode, blocknr, (unsigned long long) offsetblock,
-         (unsigned long long) size);
     inobno.inode = inode;
     inobno.blocknr = blocknr;
 
@@ -2635,7 +2607,6 @@ void wait_io_pending(unsigned long long inode)
     int c;
 
     FUNC;
-    LINFO("%s: inode=%llu", __FUNCTION__, inode);
   iowait:
     get_global_lock();
     for (c = 0; c < max_threads; c++) {
@@ -2661,7 +2632,6 @@ void wait_inode_block_pending(unsigned long long inode,
     int c;
 
     FUNC;
-    LINFO("%s: inode=%llu, blocknr=%llu", __FUNCTION__, inode, blocknr);
   iobp:
     get_global_lock();
     for (c = 0; c < max_threads; c++) {
@@ -2691,7 +2661,6 @@ int inode_block_pending(unsigned long long inode,
     int pending = 0;
 
     FUNC;
-    LINFO("%s: inode=%llu, blocknr=%llu", __FUNCTION__, inode, blocknr);
     for (c = 0; c < max_threads; c++) {
         if (0 == tdta[c]->inode)
             continue;
@@ -2754,11 +2723,10 @@ int db_unlink_file(const char *path)
     bname = s_basename((char *) path);
     res = dbstat(dname, &dirst);
 	
-    LINFO("%s: path=%s, inode=%llu, has %d links, dir inode is %llu, size=%llu", 
+    LDEBUG("%s: path=%s, inode=%llu, has %d links, dir inode is %llu, size=%llu", 
 		__FUNCTION__, path, inode, haslinks, dirst.st_ino, st.st_size);
 	
     if (S_ISLNK(st.st_mode) && haslinks == 1) {
-    	LINFO("%s: symlink inode %llu", __FUNCTION__, inode);
         LDEBUG("unlink symlink %s inode %llu", path, inode);
         delete_key(dbs, &inode, sizeof(unsigned long long));
         LDEBUG("unlink symlink done %s", path);
@@ -2910,8 +2878,7 @@ int fs_mkdir(const char *path, mode_t mode)
     int res;
 
     FUNC;
-    LINFO("%s: path", __FUNCTION__, path);
-    LDEBUG("mode =%i", mode);
+    LDEBUG("%s: path=%s, mode=%i", __FUNCTION__, path, mode);
     if (0 == strcmp("/", path))
         rootdir = 1;
     inode = get_next_inode();
@@ -3247,8 +3214,7 @@ int update_parent_time(char *path, int linkcount)
     time_t thetime;
 
     FUNC;
-    LINFO("%s: path=%s", __FUNCTION__, path);
-    LDEBUG("update_parent_time : %s", path);
+    LDEBUG("%s: path=%s", __FUNCTION__, path);
     thetime = time(NULL);
     /* Change ctime and mtime of the parentdir Posix std posix behavior */
     res = dbstat(path, &stbuf);
@@ -3281,8 +3247,7 @@ int fs_rmdir(const char *path)
     unsigned long long dirnodes;
 
     FUNC;
-    LINFO("%s: path=%s", __FUNCTION__, path);
-    LDEBUG("rmdir called : %s", path);
+    LDEBUG("%s: path=%s", __FUNCTION__, path);
 
     pathnode = get_inode(path);
     dirnodes = has_nodes(pathnode);
@@ -3404,7 +3369,6 @@ unsigned long long has_nodes(unsigned long long inode)
     unsigned long long keyval;
 
     FUNC;
-    LINFO("%s: inode=%llu", __FUNCTION__, inode);
     cur = tcbdbcurnew(dbdirent);
     if (!tcbdbcurjump(cur, &inode, sizeof(unsigned long long))
         && tcbdbecode(dbdirent) != TCESUCCESS) {
@@ -3467,8 +3431,6 @@ void fs_read_hardlink(struct stat stbuf, DDSTAT * ddstat, void *buf,
     char *filename;
 
     FUNC;
-    LINFO("%s: dirinode=%llu, entryinode=%llu", __FUNCTION__, 
-		(unsigned long long)stbuf.st_ino, ddstat->stbuf.st_ino);
     cur = tcbdbcurnew(dbl);
 	//get dir inode and entry inode
     dinoino.dirnode = stbuf.st_ino;
@@ -3542,7 +3504,6 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     DBT *filedata;
     DDSTAT *ddstat;
     FUNC;
-    LINFO("%s: path=%s", __FUNCTION__, path);
 
     (void) offset;
     (void) fi;
@@ -3624,8 +3585,7 @@ int fs_link(char *from, char *to)
     MEMDDSTAT *memddstat;
 
     FUNC;
-    LINFO("%s: from=%s, to=%s", __FUNCTION__, from , to);
-    LDEBUG("fs_link called with from=%s to=%s", from, to);
+    LDEBUG("%s: from=%s, to=%s", __FUNCTION__, from , to);
     res = dbstat(from, &stbuf);
 
     if (res != 0)
@@ -3742,7 +3702,6 @@ int bt_entry_exists(TCBDB * db, void *parent, int parentlen, void *value,
     int ksize;
 
     FUNC;
-    LINFO("%s", __FUNCTION__);
     cur = tcbdbcurnew(dbdirent);
     if (!tcbdbcurjump(cur, parent, parentlen)
         && tcbdbecode(db) != TCESUCCESS) {
@@ -3784,8 +3743,6 @@ int fs_symlink(char *from, char *to)
     int res = 0;
     char *todir;
 
-    LINFO("%s: from=%s, to=%s", __FUNCTION__, from , to);
-
     todir = s_dirname(to);
     dbmknod(to, 0777 | S_IFLNK, from, 0);
     res = update_parent_time(todir,0);
@@ -3805,7 +3762,7 @@ int fs_readlink(const char *path, char *buf, size_t size)
     unsigned long long inode;
 
     FUNC;
-    LINFO("%s: path=%s, size=%llu", __FUNCTION__, path, (unsigned long long)size);
+    LDEBUG("%s: path=%s, size=%llu", __FUNCTION__, path, (unsigned long long)size);
     inode = get_inode(path);
     if (0 == inode)
         return (-ENOENT);
@@ -3844,12 +3801,11 @@ int fs_rename_link(const char *from, const char *to, struct stat stbuf)
 
     FUNC;
 	//stbuf refers to the from inode
-    LINFO("%s: from=%s, to=%s", __FUNCTION__, from , to);
-    LDEBUG("fs_rename_link from: %s : to %s", (char *) from, (char *) to);
+    LDEBUG("%s: from=%s, to=%s", __FUNCTION__, from , to);
     if (0 == strcmp(from, to))
         return (0);
     if (-ENOENT != dbstat(to, &st)) {
-    	LINFO("%s: to inode exist as inode %llu, delete it", __FUNCTION__, 
+    	LDEBUG("%s: to inode exist as inode %llu, delete it", __FUNCTION__, 
 			st.st_ino);
         if (NULL != config->blockdatabs) {
             db_unlink_file(to);
@@ -3920,8 +3876,7 @@ void update_cache(unsigned long long inode, struct stat *stbuf)
     DBT *ddbuf;
 
     FUNC;
-    LINFO("%s: inode=%llu", __FUNCTION__, inode);
-    LDEBUG("update_cache nlinks : %u", stbuf->st_nlink);
+    LDEBUG("%s: inode=%llu", __FUNCTION__, inode);
     dataptr = search_memhash(dbcache, &inode, sizeof(unsigned long long));
     if (dataptr == NULL) {
         return;
@@ -3964,8 +3919,7 @@ int fs_rename(const char *from, const char *to, struct stat stbuf)
 
     FUNC;
     
-    LINFO("%s: from=%s, to=%s", __FUNCTION__, from , to);
-    LDEBUG("fs_rename from: %s : to %s", (char *) from, (char *) to);
+    LDEBUG("%s: from=%s, to=%s", __FUNCTION__, from , to);
     todir = s_dirname((char *) to);
     todirnode = get_inode(todir);
     tonode = get_inode(to);
@@ -4055,7 +4009,7 @@ int update_stat(char *path, struct stat *stbuf)
     unsigned long long inode;
 
     FUNC;
-    LINFO("%s: path=%s", __FUNCTION__, path);
+    LDEBUG("%s: path=%s", __FUNCTION__, path);
     inode = stbuf->st_ino;
     dataptr = search_dbdata(dbp, &inode, sizeof(unsigned long long));
     if (dataptr == NULL) {
@@ -4278,7 +4232,7 @@ void checkpasswd(char *cryptopasswd)
 #endif
 
     FUNC;
-    LINFO("%s: passwd=%s", __FUNCTION__, cryptopasswd);
+    LDEBUG("%s: passwd=%s", __FUNCTION__, cryptopasswd);
 #ifdef SHA3
     stiger=sha_binhash(config->passwd, strlen((char *) config->passwd));
 #else
@@ -4309,8 +4263,6 @@ void clear_dirty()
 #ifndef SHA3
     word64 res[3];
 #endif
-
-    LINFO("%s", __FUNCTION__);
 
     brand=as_sprintf("LESSFS_DIRTY");
 #ifdef SHA3
@@ -4344,7 +4296,6 @@ int get_blocksize()
     word64 res[3];
 #endif
 
-	LINFO("%s", __FUNCTION__);
     brand=as_sprintf("LESSFS_BLOCKSIZE");
 #ifdef SHA3
     stiger=sha_binhash((unsigned char *)brand, strlen(brand));
@@ -4353,30 +4304,28 @@ int get_blocksize()
     stiger=(unsigned char *)&res;
 #endif
     if ( config->blockdatabs != NULL ) {
-	LINFO("%s: stiger = %s", __FUNCTION__, stiger);
-      inuse=getInUse(stiger);
-	  LINFO("%s: inuse = %llu", __FUNCTION__, inuse);
-      if ( 0 == inuse ) {
-         brand_blocksize();
-		 LINFO("%s: BLKSIZE = %d", __FUNCTION__, BLKSIZE);
-         blksize=BLKSIZE;
-      } else {
-         blksize=inuse;
-      }
+    	inuse=getInUse(stiger);
+	  	LDEBUG("%s: stiger=%s, inuse=%llu", __FUNCTION__, stiger, inuse);
+      	if ( 0 == inuse ) {
+         	brand_blocksize();
+		 	LINFO("%s: BLKSIZE = %d", __FUNCTION__, BLKSIZE);
+         	blksize=BLKSIZE;
+      	} else {
+         	blksize=inuse;
+      	}
     } else {
-      finuse=file_get_inuse(stiger);
-      if ( NULL == finuse ) {
-         brand_blocksize();
-         blksize=BLKSIZE;
-      } else {
-         blksize=finuse->inuse;
-      }
+      	finuse=file_get_inuse(stiger);
+      	if ( NULL == finuse ) {
+         	brand_blocksize();
+         	blksize=BLKSIZE;
+      	} else {
+         	blksize=finuse->inuse;
+      	}
     }
 #ifdef SHA3
     free(stiger);
 #endif
     free(brand);
-    LINFO("%s: blksize=%d", __FUNCTION__, blksize);
     return(blksize);
 }
 
@@ -4392,7 +4341,6 @@ void brand_blocksize()
 #ifndef SHA3
     word64 res[3];
 #endif
-    LINFO("%s", __FUNCTION__);
 
     brand=as_sprintf("LESSFS_BLOCKSIZE");
 #ifdef SHA3
@@ -4424,8 +4372,6 @@ void drop_databases()
    char *dbpath;
    struct stat stbuf;
    
-   LINFO("%s", __FUNCTION__);
-
    dbpath = as_sprintf("%s/fileblock.tch", config->fileblock);
    if (-1 != stat(dbpath, &stbuf) ) unlink(dbpath);
    free(dbpath);

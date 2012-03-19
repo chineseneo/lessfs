@@ -56,7 +56,6 @@ int r_env_cfg(char *configfile)
             value++;
             trim(token);
             trim(value);
-            //LINFO("setenv |%s|=|%s|\n", token, value);
             if (-1 == (setenv(token, value, 1))) {
                 LFATAL("Setenv failed, out of resources.\n");
                 exit(-1);
