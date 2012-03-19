@@ -238,6 +238,7 @@ void add_file_block(BLKDTA * blkdta)
     INOBNO inobno;
     DBT *cachedata = NULL;
     INUSE *inuse;
+	OFFHASH *offhash;
 
     inobno.inode = blkdta->inode;
     inobno.blocknr = blkdta->blocknr;
@@ -251,7 +252,7 @@ void add_file_block(BLKDTA * blkdta)
         if (cachedata)
             DBTfree(cachedata);
         add_blk_to_cache(blkdta->inode, blkdta->blocknr,
-                         blkdta->blockfiller);
+                         blkdta->blockfiller, blkdta->offsetfile);
         LDEBUG
             ("add_file_block : wrote with add_blk_to_cache  : inode %llu - %llu size %i",
              inobno.inode, inobno.blocknr, blkdta->bsize);
@@ -292,7 +293,11 @@ void add_file_block(BLKDTA * blkdta)
         comprfree(blkdta->compressed);
     inuse->inuse = inuse->inuse + 1;
     file_update_inuse(blkdta->stiger, inuse);
-    write_dbb_to_cache(&inobno,blkdta->stiger);
+	offhash = s_malloc(sizeof(OFFHASH));
+	offhash->offset = blkdta->offsetfile;
+	memcpy(offhash->stiger, blkdta->stiger, config->hashlen);
+    write_dbb_to_cache(&inobno, offhash);
+	free(offhash);
     free(inuse);
     EFUNC;
     return;
@@ -300,13 +305,13 @@ void add_file_block(BLKDTA * blkdta)
 
 /* delete = 1 Do delete dbdata
    delete = 0 Do not delete dbdta */
-unsigned int file_commit_block(unsigned char *dbdata,
-                               unsigned char *chksum, INOBNO inobno,
-                               bool delete)
+unsigned int file_commit_block(unsigned char *dbdata, INOBNO inobno, 
+									off_t offset)
 {
     unsigned char *stiger;
     compr *compressed;
     INUSE *inuse;
+	OFFHASH *offhash;
     unsigned int ret = 0;
 #ifndef SHA3
     word64 res[3];
@@ -339,7 +344,10 @@ unsigned int file_commit_block(unsigned char *dbdata,
     inuse->inuse++;
     file_update_inuse(stiger, inuse);
     comprfree(compressed);
-    write_dbb_to_cache(&inobno,stiger);
+	offhash = s_malloc(sizeof(OFFHASH));
+	offhash->offset = offset;
+	memcpy(offhash->stiger, stiger, config->hashlen);
+    write_dbb_to_cache(&inobno, offhash);
 #ifdef SHA3
     free(stiger);
 #endif
@@ -558,9 +566,9 @@ void put_on_freelist(INUSE * inuse)
 }
 
 void file_update_block(const char *blockdata, unsigned long long blocknr,
-                       unsigned int offsetblock,
-                       unsigned long long size, unsigned long long inode,
-                       unsigned char *chksum)
+                       unsigned int offsetblock, unsigned long long size, 
+                       unsigned long long inode, unsigned char *chksum, 
+                       off_t offset)
 {
     DBT *data = NULL;
     DBT *decrypted = NULL;
@@ -592,13 +600,13 @@ void file_update_block(const char *blockdata, unsigned long long blocknr,
         LDEBUG("try_block_cache : HIT");
         memcpy(dbdata, data->data, data->size);
         memcpy(dbdata + offsetblock, blockdata, size);
-        add_blk_to_cache(inode, blocknr, dbdata);
+        add_blk_to_cache(inode, blocknr, dbdata, offset);
         update_filesize(inode, size, offsetblock, blocknr, 0, 0, 0);
         free(dbdata);
         DBTfree(data);
         return;
     } else
-        LDEBUG("update_block: block not found in cache.");
+        LDEBUG("%s: block not found in cache.", __FUNCTION__);
 
 // We don't need the old blockdata when we overwrite it completely anyway.
     if (offsetblock > 0 || size < BLKSIZE) {
@@ -606,10 +614,10 @@ void file_update_block(const char *blockdata, unsigned long long blocknr,
 // First read the cache
         decrypted = search_memhash(dbdtaq, chksum, config->hashlen);
         if (NULL == decrypted) {
-            LDEBUG("updateBlock : Not in dbdtaq");
+            LDEBUG("%s: Not in dbdtaq", __FUNCTION__);
             data = file_tgr_read_data(chksum);
             if (NULL == data) {
-                LDEBUG("file_update_block : Not found");
+                LDEBUG("%s: Not found", __FUNCTION__);
                 cachedata =
                     search_memhash(blkcache, &inobno.inode,
                                    sizeof(unsigned long long));
@@ -622,7 +630,7 @@ void file_update_block(const char *blockdata, unsigned long long blocknr,
                     dtiger=(unsigned char *)&res;
 #endif
                     if (0 == memcmp(dtiger, chksum, config->hashlen)) {
-                        LDEBUG("data alloc here1");
+                        LDEBUG("%s: data alloc here", __FUNCTION__);
                         data = s_malloc(sizeof(DBT));
                         data->data = s_malloc(BLKSIZE);
                         data->size = BLKSIZE;
@@ -673,7 +681,7 @@ void file_update_block(const char *blockdata, unsigned long long blocknr,
         DBTfree(data);
     }
     memcpy(dbdata + offsetblock, blockdata, size);
-    add_blk_to_cache(inode, blocknr, dbdata);
+    add_blk_to_cache(inode, blocknr, dbdata, offset);
     inuse = file_get_inuse(chksum);
     if (NULL == inuse)
         die_dataerr("file_update_block : hash not found");
@@ -695,12 +703,14 @@ void file_update_block(const char *blockdata, unsigned long long blocknr,
 int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
 {
     unsigned int offsetblock;
+	unsigned long long inode;
     unsigned long long blocknr;
     unsigned long long lastblocknr;
     INUSE *inuse;
     unsigned char *stiger;
     off_t oldsize;
     DBT *data;
+	OFFHASH *offhash;
     INOBNO inobno;
     time_t thetime;
 
@@ -708,10 +718,20 @@ int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
     LDEBUG("file_fs_truncate inode %llu - size %llu", stbuf->st_ino,
            (unsigned long long) size);
     thetime = time(NULL);
-    blocknr = size / BLKSIZE;
-    offsetblock = size - (blocknr * BLKSIZE);
+	inode = stbuf->st_ino;
+	
+    if (-1 == (blocknr = get_blocknr(inode, size - 1)))
+		die_dataerr("%s: get blocknr failed.", __FUNCTION__);
+	if (NULL == (offhash = get_offhash(inode, blocknr)))
+		die_dataerr("%s: offhash of %llu-%llu not found.", __FUNCTION__, inode, 
+			blocknr);
+	
+    offsetblock = size - offhash->offset;
+	free(offhash);
     oldsize = stbuf->st_size;
-    lastblocknr = oldsize / BLKSIZE;
+    if (-1 == (lastblocknr = get_blocknr(inode, oldsize - 1)))
+		die_dataerr("%s: get blocknr failed.", __FUNCTION__);
+	
     update_filesize_cache(stbuf, size);
     LDEBUG("file_fs_truncate : truncate new block %llu, oldblock %llu",
            blocknr, lastblocknr);
@@ -739,10 +759,10 @@ int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
 // Need to continue in case of a sparse file.
             continue;
         }
+		offhash = (OFFHASH *) data->data;
         stiger = s_malloc(data->size);
-        memcpy(stiger, data->data, data->size);
-        LDEBUG
-            ("file_fs_truncate : lessfs_truncate Search to delete blocknr %llu:",
+        memcpy(stiger, offhash->stiger, config->hashlen);
+        LDEBUG("file_fs_truncate : lessfs_truncate Search to delete blocknr %llu:",
              lastblocknr);
         loghash("file_fs_truncate : tiger :", stiger);
         DBTfree(data);
@@ -754,12 +774,14 @@ int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
             put_on_freelist(inuse);
             loghash("file_fs_truncate : delete_inuse ",stiger); 
             delete_inuse(stiger);
-            LDEBUG("file_fs_truncate : delete dbb %llu-%llu",inobno.inode,inobno.blocknr);
+            LDEBUG("file_fs_truncate : delete dbb %llu-%llu", inobno.inode, 
+				inobno.blocknr);
             delete_dbb(&inobno);
         } else {
             if (inuse->inuse > 1)
                 inuse->inuse--;
-            LDEBUG("file_fs_truncate : delete dbb %llu-%llu",inobno.inode,inobno.blocknr);
+            LDEBUG("file_fs_truncate : delete dbb %llu-%llu", inobno.inode, 
+				inobno.blocknr);
             delete_dbb(&inobno);
             file_update_inuse(stiger, inuse);
         }
@@ -774,14 +796,15 @@ int file_fs_truncate(struct stat *stbuf, off_t size, char *bname)
     return (0);
 }
 
-void file_partial_truncate_block(struct stat *stbuf,
-                                 unsigned long long blocknr,
-                                 unsigned int offset)
+void file_partial_truncate_block(struct stat *stbuf, 
+				unsigned long long blocknr, unsigned int offset)
 {
     unsigned char *blockdata;
     compr *uncompdata;
     INOBNO inobno;
     DBT *data;
+	OFFHASH *offhash;
+	off_t offsetfile;
     unsigned char *stiger;
     INUSE *inuse;
     DBT cachedata;
@@ -802,9 +825,11 @@ void file_partial_truncate_block(struct stat *stbuf,
         LDEBUG("file_partial_truncate_block : deletion of non existent block.");
         return;
     }
+	offhash = (OFFHASH *) data->data;
     stiger = s_malloc(data->size);
     loghash("file_partial_truncate_block : search tiger ", stiger);
-    memcpy(stiger, data->data, data->size);
+    memcpy(stiger, offhash->stiger, config->hashlen);
+	offsetfile = offhash->offset;
     DBTfree(data);
 
     blockdata = s_malloc(BLKSIZE);
@@ -829,8 +854,6 @@ void file_partial_truncate_block(struct stat *stbuf,
           } else {
               memcpy(blockdata, data->data, offset);
           }
-          file_commit_block(blockdata,NULL,inobno,0);
-          DBTfree(data);
        }
     } else {
        dta = (QDTA *)data->data;
@@ -839,9 +862,9 @@ void file_partial_truncate_block(struct stat *stbuf,
        cachedata.size = dta->size;
        memcpy(blockdata, cachedata.data, offset);
        free(cachedata.data);
-       DBTfree(data);
-       file_commit_block(blockdata,NULL,inobno,0);
     }
+    file_commit_block(blockdata, inobno, offsetfile);
+    DBTfree(data);
     free(blockdata);
 
     inuse = file_get_inuse(stiger);

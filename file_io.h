@@ -31,16 +31,16 @@ typedef struct {
 
 INUSE *file_get_inuse(unsigned char *);
 void add_file_block(BLKDTA *);
-unsigned int file_commit_block(unsigned char *, unsigned char *, INOBNO,
-                               bool);
+unsigned int file_commit_block(unsigned char *, INOBNO, off_t);
 void file_sync_flush_dtaq();
 void file_partial_truncate_block(struct stat *, unsigned long long,
                                  unsigned int);
 int file_unlink_file(const char *);
 void file_update_block(const char *, unsigned long long, unsigned int,
                        unsigned long long, unsigned long long,
-                       unsigned char *);
-unsigned long long file_read_block(unsigned long long, const char *, char *, unsigned long long);
+                       unsigned char *, off_t);
+unsigned long long file_read_block(unsigned long long, const char *, char *, 
+										unsigned long long);
 int file_fs_truncate(struct stat *, off_t, char *);
 void file_update_inuse(unsigned char *, INUSE *);
 DBT *file_tgr_read_data(unsigned char *);

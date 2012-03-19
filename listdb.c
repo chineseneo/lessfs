@@ -161,18 +161,19 @@ void listdbb()
     int vsize;
     unsigned long long inode;
     unsigned long long blocknr;
+	OFFHASH *offhash;
 
     /* traverse records */
     tchdbiterinit(dbb);
     while ((key = tchdbiternext(dbb, &size)) != NULL) {
-        value = tchdbget(dbb, key, size, &vsize);
-        asc_hash = ascii_hash((unsigned char *) value);
+        offhash = (OFFHASH *) tchdbget(dbb, key, size, &vsize);
+        asc_hash = ascii_hash(offhash->stiger);
         memcpy(&inode, key, sizeof(unsigned long long));
         memcpy(&blocknr, key + sizeof(unsigned long long),
                sizeof(unsigned long long));
-        printf("%llu-%llu : %s\n", inode, blocknr, asc_hash);
+        printf("%llu-%llu:%llu-%s\n", inode, blocknr, offhash->offset, asc_hash);
+		free(offhash);
         free(asc_hash);
-        free(value);
         free(key);
     }
 }

@@ -23,6 +23,7 @@
 #define die_syserr() { LFATAL("Fatal system error : %s",strerror(errno)); exit(EXIT_SYSTEM); }
 #define MAX_POSIX_FILENAME_LEN 256
 #define MAX_FUSE_BLKSIZE 131072
+#define MAX_HASH_LEN 32
 #define BMWLEN 224
 #define METAQSIZE 2048
 
@@ -32,19 +33,24 @@ typedef unsigned char byte;
 void tiger(byte *, word64, word64 *);
 
 typedef struct {
-    unsigned long long inode;
-    unsigned long long blocknr;
+	unsigned long long inode;
+	unsigned long long blocknr;
 } INOBNO;
 
 typedef struct {
-    //unsigned int snapshotnr;
-    unsigned long long dirnode;
-    unsigned long long inode;
+	off_t offset;
+	unsigned char stiger[MAX_HASH_LEN];
+} OFFHASH;
+
+typedef struct {
+	//unsigned int snapshotnr;
+	unsigned long long dirnode;
+	unsigned long long inode;
 } DINOINO;
 
 typedef struct {
-    unsigned long size;
-    unsigned char *data;
+	unsigned long size;
+	unsigned char *data;
 } DBT;
 
 typedef struct {
@@ -58,8 +64,9 @@ typedef struct {
 } CRYPTO;
 
 typedef struct {
-    unsigned long long blocknr;
-    unsigned char blockdata[MAX_FUSE_BLKSIZE];
+	unsigned long long blocknr;
+	off_t offset;
+	unsigned char blockdata[MAX_FUSE_BLKSIZE];
 } BLKCACHE;
 
 typedef struct {
@@ -77,6 +84,7 @@ typedef struct {
     const char *blockdata;
     unsigned long long blocknr;
     unsigned int offsetblock;
+	off_t offsetfile;
     size_t bsize;
     unsigned long long inode;
     bool sparse;
@@ -123,7 +131,7 @@ void update_filesize(unsigned long long, unsigned long long, unsigned int,
 void addBlock(BLKDTA *);
 void db_update_block(const char *, unsigned long long,
                      unsigned int, unsigned long long, unsigned long long,
-                     unsigned char *);
+                     unsigned char *, off_t);
 void write_file_ent(const char *, unsigned long long, mode_t mode, char *,
                     dev_t);
 int db_unlink_file(const char *);
@@ -199,7 +207,7 @@ int inode_block_pending(unsigned long long, unsigned long long);
 DBT *try_block_cache(unsigned long long, unsigned long long, unsigned int);
 void flush_dta_queue();
 void add_blk_to_cache(unsigned long long, unsigned long long,
-                      unsigned char *);
+                      unsigned char *, off_t);
 void qdta(unsigned char *, DBT *);
 void comprfree(compr *);
 void loghash(char *, unsigned char *);
@@ -214,9 +222,11 @@ int sync_flush_dbu();
 int sync_flush_dbb();
 void delete_inuse(unsigned char *);
 void delete_dbb(INOBNO *);
-void write_dbb_to_cache(INOBNO *,unsigned char *);
+void write_dbb_to_cache(INOBNO *, OFFHASH *);
 void clear_dirty();
 int get_blocksize();
+unsigned long long get_blocknr(unsigned long long, off_t);
+OFFHASH *get_offhash(unsigned long long, unsigned long long);
 void brand_blocksize();
 int update_filesize_cache(struct stat *, off_t);
 int try_open_lock();
