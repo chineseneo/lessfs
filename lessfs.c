@@ -102,6 +102,7 @@ void normalExit()
     LFATAL("Exit signal received, exitting\n");
     sync_flush_dtaq();
     sync_flush_dbu();
+    sync_flush_dbc();
     sync_flush_dbb();
     tc_close(0);
     exit(EXIT_OK);
@@ -150,6 +151,7 @@ void dbsync()
 {
     tcbdbsync(dbdirent);
     tchdbsync(dbu);
+	tchdbsync(dbc);
     tchdbsync(dbb);
     tchdbsync(dbp);
     if (NULL != config->blockdatabs) {
@@ -296,6 +298,7 @@ static int lessfs_unlink(const char *path)
     get_global_lock();
     sync_flush_dtaq();
     sync_flush_dbu();
+    sync_flush_dbc();
     sync_flush_dbb();
     if (NULL != config->blockdatabs) {
         res = db_unlink_file(path);
@@ -711,100 +714,272 @@ redo:
 static int lessfs_write(const char *path, const char *buf, size_t size,
                         off_t offset, struct fuse_file_info *fi)
 {
-    unsigned long long blocknr;
-	off_t offsetfile;
-    unsigned int offsetblock;
-    DBT *blocktiger;
-    DBT *data;
-	OFFHASH *offhash;
-    size_t bsize;
-    size_t done = 0;
-    int res;
-    INOBNO inobno;
+	return sb_write(path, buf, size, offset, fi);
+	//return fsp_write(path, buf, size, offset, fi);
+}
 
-    FUNC;
-    tiger_lock();
-    bsize = size;
-    blocknr = offset / BLKSIZE;
+int fsp_write(const char *path, const char *buf, size_t size,
+                        off_t offset, struct fuse_file_info *fi)
+{
+	  unsigned long long blocknr;
+	  off_t offsetfile;
+	  unsigned int offsetblock;
+	  DBT *blocktiger;
+	  DBT *data;
+	  OFFHASH *offhash;
+	  size_t bsize;
+	  size_t done = 0;
+	  int res;
+	  INOBNO inobno;
+	
+	  FUNC;
+	  tiger_lock();
+	  bsize = size;
+	  blocknr = offset / BLKSIZE;
+	
+	  offsetblock = offset - (blocknr * BLKSIZE);
+	  offsetfile = offset - offsetblock;
+	  if ((offsetblock + bsize) > BLKSIZE) {
+		  bsize = BLKSIZE - offsetblock;
+	  }
+	  blkdta->inode = fi->fh;
+	  inobno.inode = fi->fh;
+	  //notice that the offset printed is the offsetblock rather than offset itself...	  
+	  LDEBUG("lessfs_write : %s - %llu-%llu size %llu offset %u",path,
+		  inobno.inode,blocknr,(unsigned long long)size,offsetblock);
+	wagain:
+	  inobno.blocknr = blocknr;
+	  /*  When I/O for this inode - blocknr is pending this operation will be an update */
+	  wait_inode_block_pending(inobno.inode, inobno.blocknr);
+	  memset((char *) blkdta->blockdata, 0, BLKSIZE);
+	  LDEBUG("lessfs_write -> try_block_cache : inode %llu blocknr %llu",
+			 fi->fh, blocknr);
+	  data = try_block_cache(inobno.inode, inobno.blocknr, 2);
+	  if (NULL != data) {
+	
+		  memcpy((char *) blkdta->blockdata, data->data, data->size);
+		  memcpy((char *) blkdta->blockdata + offsetblock, buf + done,
+				 bsize);
+		  add_blk_to_cache(inobno.inode, inobno.blocknr,
+						   (unsigned char *) blkdta->blockdata, offsetfile);
+		  update_filesize(inobno.inode, bsize, offsetblock, blocknr, 0, 0,
+						  0);
+		  DBTfree(data);
+		  res = 2;
+	  } else
+		  res = 0;
+	  if (2 != res) {
+		  blocktiger = check_block_exists(inobno);
+		  if (NULL != blocktiger) {
+			  LDEBUG("lessfs_write -> update_block : inode %llu blocknr %llu",
+				   fi->fh, blocknr);
+			  offhash = (OFFHASH *) blocktiger->data;
+			  if (NULL != config->blockdatabs) {
+				  db_update_block(buf + done, blocknr, offsetblock, bsize,
+								  blkdta->inode, offhash->stiger, offsetfile);
+			  } else {
+				  file_update_block(buf + done, blocknr, offsetblock, bsize,
+									blkdta->inode, offhash->stiger, offsetfile);
+			  }
+			  DBTfree(blocktiger);
+			  release_global_lock();
+		  } else {
+			  LDEBUG
+				  ("lessfs_write -> add_block : inode %llu blocknr %llu",
+				   fi->fh, blocknr);
+			  blkdta->blocknr = blocknr;
+			  blkdta->offsetblock = offsetblock;
+			  blkdta->bsize = bsize;
+			  blkdta->offsetfile = offsetfile;
+			  blkdta->buf = (unsigned char *)buf + done;
+			  if (1 == res) {
+				  blkdta->sparse = 1;
+			  } else {
+				  blkdta->sparse = 0;
+			  }
+			  release_worker_lock();
+			  release_global_lock();
+			  write_lock();
+		  }
+	  } else
+		  release_global_lock();
+	  done = done + bsize;
+	  bsize = (size - done) > BLKSIZE? BLKSIZE : size - done;
+	  if (done < size) {
+		  blocknr++;
+		  offsetblock = 0;
+		  offsetfile += BLKSIZE;
+		  goto wagain;
+	  }
+	  release_tiger_lock();
+	  LDEBUG("lessfs_write : inode %llu blocknr %llu", fi->fh, blocknr);
+	  EFUNC;
+	  return (done);
+}
 
-    offsetblock = offset - (blocknr * BLKSIZE);
-	offsetfile = offset - offsetblock;
-    if ((offsetblock + bsize) > BLKSIZE) {
-        bsize = BLKSIZE - offsetblock;
-    }
-    blkdta->inode = fi->fh;
-    inobno.inode = fi->fh;
-	//notice that the offset printed is the offsetblock rather than offset itself...	
-    LDEBUG("lessfs_write : %s - %llu-%llu size %llu offset %u",path,
-		inobno.inode,blocknr,(unsigned long long)size,offsetblock);
-  wagain:
-    inobno.blocknr = blocknr;
-	/*  When I/O for this inode - blocknr is pending this operation will be an update */
-    wait_inode_block_pending(inobno.inode, inobno.blocknr);
-    memset((char *) blkdta->blockdata, 0, BLKSIZE);
-    LDEBUG("lessfs_write -> try_block_cache : inode %llu blocknr %llu",
-           fi->fh, blocknr);
-    data = try_block_cache(inobno.inode, inobno.blocknr, 2);
-    if (NULL != data) {
+int sb_write(const char *path, const char *buf, size_t size, off_t offset, 
+	struct fuse_file_info *fi)
+{
+	unsigned long long inode;
+	size_t doublesize, bufsize, patchsize, done;
+	BUFCACHE *cache;
+	
+	done = 0;
+	inode = fi->fh;
+	doublesize = BLKSIZE * 2;
+	
+	while(done < size){
+		if (offset == 0 || NULL == (cache = try_buf_cache(inode))){
+			if (size >= done + doublesize){
+				//deal with the buf
+				if (0 != (patchsize = sb_addblock(buf + done, offset + done, 
+					doublesize, inode)))
+					add_buf_to_bufcache(buf + (done + doublesize - patchsize), 
+						patchsize, inode, offset + (done + doublesize - patchsize));
+				done += doublesize;
+				continue;
+			}
+			else{
+				add_buf_to_bufcache(buf + done, size - done, inode, offset + done);
+				done = size;
+			}
+		}
+		else{
+			bufsize = cache->bufsize;
+			if (size >= done + doublesize - bufsize){
+				memcpy(cache->buf + bufsize, buf + done, doublesize - bufsize);
+				//deal with the buf
+				if (0 != (patchsize = sb_addblock(cache->buf, cache->offset, 
+					doublesize, inode)))
+					add_buf_to_bufcache(
+						buf + (done + doublesize - patchsize - bufsize), 
+						patchsize, inode, 
+						offset + (done + doublesize - patchsize - bufsize));
+				done += doublesize - bufsize;
+				if (NULL != cache)
+					free(cache);
+				continue;
+			}
+			else{
+				add_buf_to_bufcache(buf + done, size - done, inode, cache->offset);
+				done = size;
+				if (NULL != cache)
+					free(cache);				
+			}
+		}
+	}
+	return done;
+}
 
-        memcpy((char *) blkdta->blockdata, data->data, data->size);
-        memcpy((char *) blkdta->blockdata + offsetblock, buf + done,
-               bsize);
-        add_blk_to_cache(inobno.inode, inobno.blocknr,
-                         (unsigned char *) blkdta->blockdata, offsetfile);
-        update_filesize(inobno.inode, bsize, offsetblock, blocknr, 0, 0,
-                        0);
-        DBTfree(data);
-        res = 2;
-    } else
-        res = 0;
-    if (2 != res) {
-        blocktiger = check_block_exists(inobno);
-        if (NULL != blocktiger) {
-            LDEBUG("lessfs_write -> update_block : inode %llu blocknr %llu",
-                 fi->fh, blocknr);
-			offhash = (OFFHASH *) blocktiger->data;
-            if (NULL != config->blockdatabs) {
-                db_update_block(buf + done, blocknr, offsetblock, bsize,
-                                blkdta->inode, offhash->stiger, offsetfile);
-            } else {
-                file_update_block(buf + done, blocknr, offsetblock, bsize,
-                                  blkdta->inode, offhash->stiger, offsetfile);
-            }
-            DBTfree(blocktiger);
-            release_global_lock();
-        } else {
-            LDEBUG
-                ("lessfs_write -> add_block : inode %llu blocknr %llu",
-                 fi->fh, blocknr);
-            blkdta->blocknr = blocknr;
-            blkdta->offsetblock = offsetblock;
-            blkdta->bsize = bsize;
-			blkdta->offsetfile = offsetfile;
-            blkdta->buf = (unsigned char *)buf + done;
-            if (1 == res) {
-                blkdta->sparse = 1;
-            } else {
-                blkdta->sparse = 0;
-            }
-            release_worker_lock();
-            release_global_lock();
-            write_lock();
-        }
-    } else
-        release_global_lock();
-    done = done + bsize;
-    bsize = (size - done) > BLKSIZE? BLKSIZE : size - done;
-    if (done < size) {
-        blocknr++;
-        offsetblock = 0;
-		offsetfile += BLKSIZE;
-        goto wagain;
-    }
-    release_tiger_lock();
-    LDEBUG("lessfs_write : inode %llu blocknr %llu", fi->fh, blocknr);
-    EFUNC;
-    return (done);
+int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize, 
+	unsigned long long inode)
+{
+	int head, tail, fragsize;
+	unsigned long long checksumusage, stigerusage;
+	int blksize = BLKSIZE;
+	unsigned char checkbuf[blksize], *fragbuf;
+	unsigned int key;
+	unsigned char *stiger;
+	INOBNO inobno;
+	unsigned int offsetblock = 0, compressed = 0, deduplicated, offsetbuf;
+	bool sparse = 0;
+	
+#ifndef SHA3
+    word64 res[3];
+#endif
+
+	head = 0;
+	tail = bufsize;
+	inobno.inode = inode;
+	inobno.blocknr = try_blocknr_cache(inode);
+	while (head <= tail - blksize){
+		memcpy(checkbuf, buf + head, blksize);
+		//check the buf
+		key = (head == 0)? checksum(checkbuf, blksize) : 
+			rolling_checksum(key, blksize, buf[head - 1], buf[head + blksize]);
+		if (0 != (checksumusage = checksum_exists(key))){
+#ifdef SHA3
+            stiger=sha_binhash(checkbuf, blksize);
+#else
+            binhash(checkbuf, blksize, res);
+            stiger = (unsigned char *)&res;
+#endif
+			if (0 != (stigerusage = getInUse(stiger))){
+#ifdef SHA3
+				free(stiger);
+#endif
+				if (head > 0){
+					fragbuf= s_malloc(head);
+					memcpy(fragbuf, buf, head);
+#ifdef SHA3
+		            stiger=sha_binhash(fragbuf, blksize);
+#else
+		            binhash(fragbuf, blksize, res);
+		            stiger = (unsigned char *)&res;
+#endif
+					if(0 != (stigerusage = getInUse(stiger))){
+						deduplicated = 1;
+					}
+#ifdef SHA3
+					free(stiger);
+#endif
+			        if (NULL != config->blockdatabs) {
+			            db_commit_block(fragbuf, inobno, offset);
+			        } else {
+			            file_commit_block(fragbuf, inobno, offset);
+			        }
+					free(fragbuf);
+					update_filesize(inode, head, offsetblock, inobno.blocknr, 
+						sparse, compressed, deduplicated);
+					inobno.blocknr++;
+					offset += head;
+				}
+				deduplicated = 1;
+				update_checksum_inuse(key, ++checksumusage);
+				add_blk_to_cache(inode, inobno.blocknr, checkbuf, offset);
+				update_filesize(inode, blksize, offsetblock, inobno.blocknr, 
+					sparse, compressed, deduplicated);
+				return blksize - head;
+			}
+#ifdef SHA3
+			free(stiger);
+#endif
+		}
+		head++;
+	}
+	
+	//add the two blocks	
+	if (head != 0){
+		fragbuf = s_malloc(blksize);
+		memcpy(fragbuf, buf, blksize);
+		update_checksum_inuse(checksum(fragbuf, blksize), 1);
+		if (NULL != config->blockdatabs) {
+			db_commit_block(fragbuf, inobno, offset);
+		} else {
+			file_commit_block(fragbuf, inobno, offset);
+		}
+		free(fragbuf);
+		fragbuf = NULL;
+		update_filesize(inode, blksize, offsetblock, inobno.blocknr, 
+			sparse, compressed, deduplicated);
+		inobno.blocknr++;
+		offset += blksize;
+		fragsize = bufsize - blksize;
+		offsetbuf = blksize;
+	} else {
+		fragsize = bufsize;
+		offsetbuf = 0;
+	}
+	fragbuf = s_malloc(fragsize);
+	memcpy(fragbuf, buf + offsetbuf, fragsize);
+	if (fragsize == blksize)
+		update_checksum_inuse(checksum(fragbuf, fragsize), 1);
+	add_blk_to_cache(inode, inobno.blocknr, fragbuf, offset);
+	free(fragbuf);
+	fragbuf = NULL;
+	update_filesize(inode, fragsize, offsetblock, inobno.blocknr, 
+		sparse, compressed, deduplicated);
+	return 0;
 }
 
 /*
@@ -837,6 +1012,7 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
     MEMDDSTAT *memddstat;
     DBT *ddbuf;
     DBT *data;
+	BUFCACHE *cache;
 
     FUNC;
 // Finish pending i/o for this inode.
@@ -846,6 +1022,10 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
     if (dataptr != NULL) {
         memddstat = (MEMDDSTAT *) dataptr->data;
         if (memddstat->opened == 1) {
+			if (NULL != (cache = try_buf_cache(fi->fh))){
+				sb_addblock(cache->buf, cache->offset, cache->bufsize, cache->inode);
+				free(cache);
+			}
 // Flush blocks in cache that where not written yet, if any.
             data = try_block_cache(fi->fh, 0, 1);
             if (data != NULL)
@@ -910,6 +1090,7 @@ static int lessfs_fsync(const char *path, int isdatasync,
         update_filesize_onclose(fi->fh);
     }
     sync_flush_dbu();
+    sync_flush_dbc();
     sync_flush_dbb();
     /* When config->relax == 1 dbsync is not called but the caches within lessfs
        are flushed making this a safer option. */
@@ -927,6 +1108,7 @@ static void lessfs_destroy(void *unused __attribute__ ((unused)))
 {
     FUNC;
     sync_flush_dbu();
+    sync_flush_dbc();
     sync_flush_dbb();
     clear_dirty();
     tc_close(0);
@@ -975,6 +1157,7 @@ void freeze_nospace(char *dbpath)
          dbpath);
     get_global_lock();
     sync_flush_dbu();
+    sync_flush_dbc();
     sync_flush_dbb();
     sync_flush_dtaq(); 
     tc_close(1);
@@ -999,8 +1182,25 @@ void *flush_dbu_worker(void *arg)
    int done;
    while(1)
    {
-      LDEBUG("flush_dbu_worker : call sync_flush_dbu"); 
+      LDEBUG("flush_dbu_worker : call sync_flush_dbc"); 
       done=sync_flush_dbu();
+      if ( done == 0 ){
+         sleeptime=config->flushtime;
+      } else {
+         sleeptime=sleeptime/2;
+      }
+      sleep(sleeptime);
+   } 
+}
+
+void *flush_dbc_worker(void *arg)
+{
+   int sleeptime=config->flushtime;
+   int done;
+   while(1)
+   {
+      LDEBUG("flush_dbc_worker : call sync_flush_dbu"); 
+      done=sync_flush_dbc();
       if ( done == 0 ){
          sleeptime=config->flushtime;
       } else {
@@ -1576,6 +1776,7 @@ static void *lessfs_init()
 
     pthread_spin_init(&moddb_spinlock, 0);
     pthread_spin_init(&dbu_spinlock, 0);
+    pthread_spin_init(&dbc_spinlock, 0);
     pthread_spin_init(&dbb_spinlock, 0);
 
 #ifdef LZO

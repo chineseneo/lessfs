@@ -1,5 +1,6 @@
 extern pthread_spinlock_t moddb_spinlock;
 extern pthread_spinlock_t dbu_spinlock;
+extern pthread_spinlock_t dbc_spinlock;
 extern pthread_spinlock_t dbb_spinlock;
 extern unsigned int dbu_qcount;
 extern unsigned int dbb_qcount;
@@ -16,6 +17,7 @@ BLKDTA **tdta = NULL;
 
 extern TCHDB *dbp;
 extern TCHDB *dbu;
+extern TCHDB *dbc;
 extern TCHDB *dbb;
 extern TCHDB *dbdta;
 extern TCHDB *dbs;
@@ -25,7 +27,9 @@ extern TCBDB *dbl;
 extern TCMDB *dbcache;
 extern TCMDB *dbdtaq;
 extern TCMDB *blkcache;
+extern TCMDB *bufcache;
 extern TCMDB *dbum;
+extern TCMDB *dbcm;
 extern TCMDB *dbbm;
 extern int fdbdta;
 
