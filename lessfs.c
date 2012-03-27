@@ -823,7 +823,8 @@ int sb_write(const char *path, const char *buf, size_t size, off_t offset,
 	unsigned long long inode;
 	size_t doublesize, bufsize, patchsize, done;
 	BUFCACHE *cache;
-	
+
+	tiger_lock();
 	done = 0;
 	inode = fi->fh;
 	doublesize = BLKSIZE * 2;
@@ -868,6 +869,7 @@ int sb_write(const char *path, const char *buf, size_t size, off_t offset,
 			}
 		}
 	}
+	release_tiger_lock();
 	return done;
 }
 
@@ -877,7 +879,7 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 	int head, tail, fragsize;
 	unsigned long long checksumusage, stigerusage;
 	int blksize = BLKSIZE;
-	unsigned char checkbuf[blksize], *fragbuf;
+	unsigned char *checkbuf, *fragbuf;
 	unsigned int key;
 	unsigned char *stiger;
 	INOBNO inobno;
@@ -892,6 +894,7 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 	tail = bufsize;
 	inobno.inode = inode;
 	inobno.blocknr = try_blocknr_cache(inode);
+	checkbuf = s_malloc(blksize);
 	while (head <= tail - blksize){
 		memcpy(checkbuf, buf + head, blksize);
 		//check the buf
@@ -947,6 +950,7 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 		}
 		head++;
 	}
+	free(checkbuf);
 	
 	//add the two blocks	
 	if (head != 0){

@@ -1200,10 +1200,23 @@ OFFHASH *buf_to_offhash(DBT *data)
 {
     OFFHASH *offhash;
 	
-    LDEBUG("%s: size=%d", __FUNCTION__, size);
 	offhash = s_malloc(data->size);
 	memcpy(offhash, data->data, data->size);
+	DBTfree(data);
     return offhash;
+}
+
+/*
+ * Convert the value to struct bufcache
+ */
+BUFCACHE *buf_to_bufcache(DBT *data)
+{
+    BUFCACHE *cache;
+	
+	cache = s_malloc(data->size);
+	memcpy(cache, data->data, data->size);
+	DBTfree(data);
+    return cache;
 }
 
 /*
@@ -2248,7 +2261,7 @@ void add_blk_to_cache(unsigned long long inode, unsigned long long blocknr,
     return;
 }
 
-void add_buf_to_bufcache(const char *buf, size_t bufsize, 
+void add_buf_to_bufcache(unsigned char *buf, size_t bufsize, 
 	unsigned long long inode, off_t offset)
 {
 	BUFCACHE cache;
@@ -2270,12 +2283,9 @@ BUFCACHE *try_buf_cache(unsigned long long inode)
 	BUFCACHE *cache = NULL;
 	
 	FUNC;
-	data = search_memhash(bufcache, &inode, sizeof(unsigned long long));
-	if (data != NULL) {
-		cache = s_malloc(sizeof(BUFCACHE));
-		memcpy(cache, data->data, data->size);
-		mdelete_key(bufcache, &inode, sizeof(unsigned long long));
-		DBTfree(data);
+	if (NULL != 
+		(data = search_memhash(bufcache, &inode, sizeof(unsigned long long)))) {
+		cache = buf_to_bufcache(data);
 	}
 	EFUNC;
 	return cache;
