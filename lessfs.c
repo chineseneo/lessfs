@@ -883,7 +883,7 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 	unsigned int key;
 	unsigned char *stiger;
 	INOBNO inobno;
-	unsigned int offsetblock = 0, compressed = 0, deduplicated, offsetbuf;
+	unsigned int offsetblock = 0, compressed = 0, deduplicated = 0, offsetbuf;
 	bool sparse = 0;
 	
 #ifndef SHA3
@@ -894,6 +894,7 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 	tail = bufsize;
 	inobno.inode = inode;
 	inobno.blocknr = try_blocknr_cache(inode);
+	fragbuf = s_malloc(blksize);
 	checkbuf = s_malloc(blksize);
 	while (head <= tail - blksize){
 		memcpy(checkbuf, buf + head, blksize);
@@ -912,12 +913,11 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 				free(stiger);
 #endif
 				if (head > 0){
-					fragbuf= s_malloc(head);
 					memcpy(fragbuf, buf, head);
 #ifdef SHA3
-		            stiger=sha_binhash(fragbuf, blksize);
+		            stiger=sha_binhash(fragbuf, head);
 #else
-		            binhash(fragbuf, blksize, res);
+		            binhash(fragbuf, head, res);
 		            stiger = (unsigned char *)&res;
 #endif
 					if(0 != (stigerusage = getInUse(stiger))){
@@ -931,7 +931,8 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 			        } else {
 			            file_commit_block(fragbuf, inobno, offset);
 			        }
-					free(fragbuf);
+					if (head == blksize)
+						update_checksum_inuse(adler32_checksum(fragbuf, blksize), 1);
 					update_filesize(inode, head, offsetblock, inobno.blocknr, 
 						sparse, compressed, deduplicated);
 					inobno.blocknr++;
@@ -942,6 +943,8 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 				add_blk_to_cache(inode, inobno.blocknr, checkbuf, offset);
 				update_filesize(inode, blksize, offsetblock, inobno.blocknr, 
 					sparse, compressed, deduplicated);
+				free(fragbuf);
+				free(checkbuf);
 				return blksize - head;
 			}
 #ifdef SHA3
@@ -950,11 +953,9 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 		}
 		head++;
 	}
-	free(checkbuf);
 	
 	//add the two blocks	
 	if (head != 0){
-		fragbuf = s_malloc(blksize);
 		memcpy(fragbuf, buf, blksize);
 		update_checksum_inuse(checksum(fragbuf, blksize), 1);
 		if (NULL != config->blockdatabs) {
@@ -962,8 +963,6 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 		} else {
 			file_commit_block(fragbuf, inobno, offset);
 		}
-		free(fragbuf);
-		fragbuf = NULL;
 		update_filesize(inode, blksize, offsetblock, inobno.blocknr, 
 			sparse, compressed, deduplicated);
 		inobno.blocknr++;
@@ -974,15 +973,14 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 		fragsize = bufsize;
 		offsetbuf = 0;
 	}
-	fragbuf = s_malloc(fragsize);
 	memcpy(fragbuf, buf + offsetbuf, fragsize);
 	if (fragsize == blksize)
 		update_checksum_inuse(checksum(fragbuf, fragsize), 1);
 	add_blk_to_cache(inode, inobno.blocknr, fragbuf, offset);
-	free(fragbuf);
-	fragbuf = NULL;
 	update_filesize(inode, fragsize, offsetblock, inobno.blocknr, 
 		sparse, compressed, deduplicated);
+	free(fragbuf);
+	free(checkbuf);
 	return 0;
 }
 
@@ -1038,17 +1036,17 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
 // Update the filesize when needed.
             update_filesize_onclose(fi->fh);
 #ifdef x86_64
-            LINFO
+            LDEBUG
                 ("File %s size %lu bytes : lzo compressed bytes %llu and %llu duplicate blocks",
                  path, memddstat->stbuf.st_size,
                  memddstat->lzo_compressed_size, memddstat->deduplicated);
 #else
-            LINFO
+            LDEBUG
                 ("File %s size %llu bytes : lzo compressed bytes %llu and %llu duplicate blocks",
                  path, memddstat->stbuf.st_size,
                  memddstat->lzo_compressed_size, memddstat->deduplicated);
 #endif
-            LINFO("File %s compression ratio : 1 : %f", path,
+            LDEBUG("File %s compression ratio : 1 : %f", path,
                    (float) memddstat->stbuf.st_size /
                    memddstat->lzo_compressed_size);
             LDEBUG("lessfs_release : Delete cache for %llu", fi->fh);
@@ -1797,6 +1795,7 @@ static void *lessfs_init()
     pthread_t housekeeping_thread;
     pthread_t flush_thread;
     pthread_t flush_dbu_thread;
+    pthread_t flush_dbc_thread;
     pthread_t flush_dbb_thread;
 
     LDEBUG("lessfs_init : worker_lock");
@@ -1828,6 +1827,9 @@ static void *lessfs_init()
     ret = pthread_create(&flush_dbu_thread, NULL, flush_dbu_worker, (void *) NULL);
     if (ret != 0)
         die_syserr();
+    ret = pthread_create(&flush_dbc_thread, NULL, flush_dbc_worker, (void *) NULL);
+    if (ret != 0)
+        die_syserr();
     ret = pthread_create(&flush_dbb_thread, NULL, flush_dbb_worker, (void *) NULL);
     if (ret != 0)
         die_syserr();
@@ -1838,6 +1840,9 @@ static void *lessfs_init()
         die_syserr();
 
     check_blocksize();
+	read_dbc();	
+	read_dbu();	
+	read_dbb();
     if ( check_dirty()){
        LFATAL("Lessfs has not been unmounted cleanly, you are advised to run lessfsck.");
     } else {

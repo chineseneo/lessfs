@@ -85,6 +85,9 @@ TCMDB *dbcache;
 TCMDB *dbdtaq;
 TCMDB *blkcache;                // A cache that has the tiger hash as key and the fs data as value.
 TCMDB *bufcache; 
+TCMDB *dbccache;
+TCMDB *dbucache;
+TCMDB *dbbcache;
 TCMDB *dbum;
 TCMDB *dbcm;
 TCMDB *dbbm;
@@ -299,7 +302,7 @@ void tc_open(bool defrag, bool createpath)
     dbu = hashdb_open(dbpath, 2621440, atol(config->blockusagebs));
     free(dbpath);
 
-    dbpath = as_sprintf("%s/chechsumusage.tch", config->checksumusage);
+    dbpath = as_sprintf("%s/checksumusage.tch", config->checksumusage);
     if ( createpath ) mkpath(config->checksumusage,0744);
     LDEBUG("Open database %s", dbpath);
     dbc = hashdb_open(dbpath, 2621440, atol(config->checksumusagebs));
@@ -392,6 +395,9 @@ void tc_open(bool defrag, bool createpath)
         dbdtaq = tcmdbnew();
         blkcache = tcmdbnew();
 		bufcache = tcmdbnew();
+		dbccache = tcmdbnew();	
+		dbucache = tcmdbnew();	
+		dbbcache = tcmdbnew();	
 		
         if (NULL == config->blockdatabs) {
             if (-1 ==
@@ -467,6 +473,9 @@ void tc_close(bool defrag)
         tcmdbdel(dbdtaq);
         tcmdbdel(blkcache);
 		tcmdbdel(bufcache);
+        tcmdbdel(dbccache);
+		tcmdbdel(dbucache);
+		tcmdbdel(dbbcache);
         if (NULL == config->blockdatabs) {
             close(fdbdta);
         }
@@ -1411,17 +1420,10 @@ unsigned long long getInUse(unsigned char *tigerstr)
     if (NULL == tigerstr)
         return (0);
 
-    get_dbu_lock();
-    data = search_memhash(dbum, tigerstr, config->hashlen);
-    if ( NULL == data ) {
-        data = search_dbdata(dbu, tigerstr, config->hashlen);
-    }
+    data = search_memhash(dbucache, tigerstr, config->hashlen);
     if (NULL == data) {
-        LDEBUG("getInuse nothing found return 0.");
-        release_dbu_lock();
         return (0);
     }
-    release_dbu_lock();
     memcpy(&counter, data->data, sizeof(counter));
     DBTfree(data);
     LDEBUG("%s: hash=%s inuse=%llu", __FUNCTION__, tigerstr, counter);
@@ -1433,19 +1435,99 @@ unsigned long long checksum_exists(unsigned int key)
 	unsigned long long counter;
 	DBT *data;
 
-	get_dbc_lock();
-	data = search_memhash(dbcm, (void *) &key, sizeof(unsigned int));
+	data = search_memhash(dbccache, (void *) &key, sizeof(unsigned int));
 	if (data == NULL) {
-		data = search_dbdata(dbc, (void *) &key, sizeof(unsigned int));
-	}
-	if (data == NULL) {
-		release_dbc_lock();
+		LDEBUG("%s: checksum not found.", __FUNCTION__);
 		return 0;
 	}
-	release_dbc_lock();
 	memcpy(&counter, data->data, data->size);
+	LDEBUG("%s: checksum found, key=%d counter=%llu.", __FUNCTION__, key, counter);
 	DBTfree(data);
 	return counter;
+}
+
+void read_dbc()
+{
+    unsigned int *kdata;
+    unsigned long long *vdata;
+    int ksize;
+    int vsize;
+    int count=0;
+	
+    FUNC;
+    tchdbiterinit(dbc);
+    while ((kdata = tchdbiternext(dbc, &ksize)) != NULL) {
+        get_dbc_lock();
+        vdata = tchdbget(dbc, kdata, ksize, &vsize);
+        if (NULL == vdata) {
+            release_dbc_lock();
+            continue;
+        }
+        mbin_write_dbdata(dbccache, kdata, ksize, vdata, vsize);
+        release_dbc_lock();
+        free(kdata);
+        free(vdata);
+		count++;
+    }
+	LDEBUG("%s: %d records", __FUNCTION__, count);
+    EFUNC;
+    return;
+}
+
+void read_dbu()
+{
+    unsigned char *kdata;
+    unsigned long long *vdata;
+    int ksize;
+    int vsize;
+    int count=0;
+	
+    FUNC;
+    tchdbiterinit(dbu);
+    while ((kdata = tchdbiternext(dbu, &ksize)) != NULL) {
+        get_dbu_lock();
+        vdata = tchdbget(dbu, kdata, ksize, &vsize);
+        if (NULL == vdata) {
+            release_dbu_lock();
+            continue;
+        }
+        mbin_write_dbdata(dbucache, kdata, ksize, vdata, vsize);
+        release_dbu_lock();
+        free(kdata);
+        free(vdata);
+		count++;
+    }
+	LDEBUG("%s: %d records", __FUNCTION__, count);
+    EFUNC;
+    return;
+}
+
+void read_dbb()
+{
+    INOBNO *kdata;
+    OFFHASH *vdata;
+    int ksize;
+    int vsize;
+    int count=0;
+	
+    FUNC;
+    tchdbiterinit(dbb);
+    while ((kdata = tchdbiternext(dbb, &ksize)) != NULL) {
+        get_dbb_lock();
+        vdata = tchdbget(dbb, kdata, ksize, &vsize);
+        if (NULL == vdata) {
+            release_dbb_lock();
+            continue;
+        }
+        mbin_write_dbdata(dbbcache, kdata, ksize, vdata, vsize);
+        release_dbb_lock();
+        free(kdata);
+        free(vdata);
+		count++;
+    }
+	LDEBUG("%s: %d records", __FUNCTION__, count);
+    EFUNC;
+    return;
 }
 
 /*
@@ -1472,12 +1554,14 @@ void update_inuse(unsigned char *hashdata,
 {
     LDEBUG("%s: hash=%s, inuse=%llu", __FUNCTION__, hashdata, inuse);
     if (inuse > 0) {
+        mbin_write_dbdata(dbucache, hashdata, config->hashlen, 
+			(unsigned char *) &inuse, sizeof(unsigned long long));
         if ( dbu_qcount > METAQSIZE ) {
             sync_flush_dbu();
         }
         get_dbu_lock();
-        mbin_write_dbdata(dbum, hashdata, config->hashlen, (unsigned char *) &inuse,
-                         sizeof(unsigned long long));
+        mbin_write_dbdata(dbum, hashdata, config->hashlen, 
+			(unsigned char *) &inuse, sizeof(unsigned long long));
         dbu_qcount++;
         release_dbu_lock();
     }
@@ -1490,6 +1574,8 @@ void update_checksum_inuse(unsigned int key, unsigned long long inuse)
 {
     LDEBUG("%s: hash=%d, inuse=%llu", __FUNCTION__, key, inuse);
     if (inuse > 0) {
+		mbin_write_dbdata(dbccache, (void *) &key, sizeof(unsigned int), 
+			(unsigned char *) &inuse, sizeof(unsigned long long));
         if ( dbc_qcount > METAQSIZE ) {
             sync_flush_dbc();
         }
@@ -1511,6 +1597,9 @@ void write_dbb_to_cache(INOBNO *inobno, OFFHASH *offhash)
 { 
     LDEBUG("%s: inode=%llu, blocknr=%llu, hash=%s", __FUNCTION__, 
 		inobno->inode, inobno->blocknr, stiger);
+	
+    mbin_write_dbdata(dbbcache, inobno, sizeof(INOBNO), (void *) offhash, 
+						sizeof(OFFHASH));
     if ( dbb_qcount > METAQSIZE ) {
          sync_flush_dbb();
     }
@@ -2705,12 +2794,7 @@ DBT *check_block_exists(INOBNO inobno)
     FUNC;
     LDEBUG("%s: inode=%llu, blocknr=%llu", __FUNCTION__, inobno.inode, 
 		inobno.blocknr);
-    get_dbb_lock();
-    data = search_memhash(dbbm, &inobno, sizeof(INOBNO));
-    if ( NULL == data ) {
-       data = search_dbdata(dbb, &inobno, sizeof(INOBNO));
-    }
-    release_dbb_lock();
+    data = search_memhash(dbbcache, &inobno, sizeof(INOBNO));
     if (NULL == data) {
         cachedata = search_memhash(blkcache, &inobno.inode,
 			sizeof(unsigned long long));
@@ -4560,6 +4644,9 @@ void drop_databases()
    if (-1 != stat(dbpath, &stbuf) ) unlink(dbpath);
    free(dbpath);
    dbpath = as_sprintf("%s/blockusage.tch", config->blockusage);
+   if (-1 != stat(dbpath, &stbuf) ) unlink(dbpath);
+   free(dbpath);
+   dbpath = as_sprintf("%s/checksumusage.tch", config->checksumusage);
    if (-1 != stat(dbpath, &stbuf) ) unlink(dbpath);
    free(dbpath);
    dbpath = as_sprintf("%s/metadata.tcb", config->meta);
