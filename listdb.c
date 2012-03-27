@@ -110,6 +110,25 @@ void listdbu()
     }
 }
 
+void listdbc()
+{
+    char *key, *value;
+    int size;
+	unsigned int checksum;
+    unsigned long long counter;
+
+    /* traverse records */
+    tchdbiterinit(dbc);
+    while ((key = tchdbiternext2(dbc)) != NULL) {
+        value = tchdbget(dbc, key, sizeof(unsigned int), &size);
+        memcpy(&checksum, key, sizeof(checksum));
+        memcpy(&counter, value, sizeof(counter));
+        printf("%u : %llu\n", checksum, counter);
+        free(value);
+        free(key);
+    }
+}
+
 void flistdbu()
 {
     char *asc_hash;
@@ -322,6 +341,8 @@ int main(int argc, char *argv[])
     } else {
        flistdbu();
     }
+    printf("\n\ndbc\n");
+    listdbc();
     printf("\n\ndbb\n");
     listdbb();
     printf("\n\ndbdirent\n");

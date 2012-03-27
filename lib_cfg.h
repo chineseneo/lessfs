@@ -24,6 +24,8 @@ struct configdata {
     char *blockdata_io_type;
     char *blockusage;
     char *blockusagebs;
+	char *checksumusage;
+	char *checksumusagebs;
     char *dirent;
     char *direntbs;
     char *fileblock;

@@ -70,6 +70,13 @@ typedef struct {
 } BLKCACHE;
 
 typedef struct {
+	unsigned long long inode;
+	off_t offset;
+	unsigned char buf[MAX_FUSE_BLKSIZE * 2];
+	size_t bufsize;
+} BUFCACHE;
+
+typedef struct {
     struct stat stbuf;
     unsigned int updated;
     unsigned long long blocknr;
@@ -120,11 +127,13 @@ void release_global_lock();
 void DBTfree(DBT *);
 void delete_key(TCHDB *, void *, int);
 unsigned long long getInUse(unsigned char *);
+unsigned long long checksum_exists(unsigned int);
 void tc_open(bool, bool);
 void tc_close(bool);
 DBT *search_dbdata(TCHDB *, void *key, int);
 char *hash(char *, int);
 void update_inuse(unsigned char *, unsigned long long);
+void update_checksum_inuse(unsigned int, unsigned long long);
 void hash_update_filesize(MEMDDSTAT *, unsigned long long);
 void update_filesize(unsigned long long, unsigned long long, unsigned int,
                      unsigned long long, bool, unsigned int, unsigned int);
@@ -205,9 +214,11 @@ void btbin_write_dup(TCBDB *, void *, int, void *, int);
 void *btsearch_keyval(TCBDB *, void *, int, void *, int);
 int inode_block_pending(unsigned long long, unsigned long long);
 DBT *try_block_cache(unsigned long long, unsigned long long, unsigned int);
+BUFCACHE *try_buf_cache(unsigned long long);
 void flush_dta_queue();
 void add_blk_to_cache(unsigned long long, unsigned long long,
                       unsigned char *, off_t);
+void add_buf_to_cache(unsigned char *, unsigned long long, off_t);
 void qdta(unsigned char *, DBT *);
 void comprfree(compr *);
 void loghash(char *, unsigned char *);
@@ -219,6 +230,7 @@ void checkpasswd(char *);
 int btdelete_curkey(TCBDB *, void *, int, void *, int);
 void log_fatal_hash(char *, unsigned char *);
 int sync_flush_dbu();
+int sync_flush_dbc();
 int sync_flush_dbb();
 void delete_inuse(unsigned char *);
 void delete_dbb(INOBNO *);
