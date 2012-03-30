@@ -1951,7 +1951,8 @@ void addBlock(BLKDTA * blkdta)
         cachedata = try_block_cache(blkdta->inode, blkdta->blocknr, 0);
         if (cachedata)
             DBTfree(cachedata);
-        add_blk_to_cache(blkdta->inode, blkdta->blocknr, blkdta->blockfiller, 
+        add_blk_to_cache(blkdta->inode, blkdta->blocknr, 
+			blkdta->bsize + blkdta->offsetblock, blkdta->blockfiller, 
 			blkdta->offsetfile);
         LDEBUG
             ("addBlock : wrote with add_blk_to_cache  : inode %llu - %llu size %i",
@@ -2281,7 +2282,7 @@ void delete_data_cache_or_db(unsigned char *chksum,
 /* delete = 1 Do delete dbdata
    delete = 0 Do not delete dbdta */
 unsigned int db_commit_block(unsigned char *dbdata, INOBNO inobno, 
-									off_t offset)
+						size_t datasize, off_t offset)
 {
     unsigned char *stiger=NULL;
     compr *compressed;
@@ -2297,16 +2298,16 @@ unsigned int db_commit_block(unsigned char *dbdata, INOBNO inobno,
 		inobno.inode, inobno.blocknr);
 //get hash of block
 #ifdef SHA3
-    stiger=sha_binhash(dbdata, BLKSIZE);
+    stiger=sha_binhash(dbdata, datasize);
 #else
-    binhash(dbdata, BLKSIZE, res);
+    binhash(dbdata, datasize, res);
     stiger=(unsigned char *)&res;
 #endif
 //compress the block
 #ifdef LZO
-    compressed = lzo_compress((unsigned char *) dbdata, BLKSIZE);
+    compressed = lzo_compress((unsigned char *) dbdata, datasize);
 #else
-    compressed = clz_compress((unsigned char *) dbdata, BLKSIZE);
+    compressed = clz_compress((unsigned char *) dbdata, datasize);
 #endif
     ret = compressed->size;
     inuse = getInUse(stiger);
@@ -2335,7 +2336,7 @@ unsigned int db_commit_block(unsigned char *dbdata, INOBNO inobno,
  * 
  */
 void add_blk_to_cache(unsigned long long inode, unsigned long long blocknr,
-                      unsigned char *data, off_t offset)
+                      size_t blksize, unsigned char *data, off_t offset)
 {
     BLKCACHE blk;
 
@@ -2343,6 +2344,7 @@ void add_blk_to_cache(unsigned long long inode, unsigned long long blocknr,
     LDEBUG("%s: inode=%llu, blocknr=%llu", __FUNCTION__, inode, blocknr);
     blk.blocknr = blocknr;
 	blk.offset = offset;
+	blk.blksize = blksize;
     memcpy(&blk.blockdata, data, BLKSIZE);
     mbin_write_dbdata(blkcache, &inode, sizeof(unsigned long long),
                       (void *) &blk, sizeof(BLKCACHE));
@@ -2375,6 +2377,7 @@ BUFCACHE *try_buf_cache(unsigned long long inode)
 	if (NULL != 
 		(data = search_memhash(bufcache, &inode, sizeof(unsigned long long)))) {
 		cache = buf_to_bufcache(data);
+		mdelete_key(bufcache, &inode, sizeof(unsigned long long));
 	}
 	EFUNC;
 	return cache;
@@ -2396,6 +2399,7 @@ DBT *try_block_cache(unsigned long long inode, unsigned long long blocknr,
     DBT *data;
     INOBNO inobno;
     BLKCACHE *blk;
+	unsigned char *buf;
 
     FUNC;
     LDEBUG("%s: inode=%llu, blocknr=%llu, mode=%d", __FUNCTION__, inode, blocknr,
@@ -2414,10 +2418,12 @@ DBT *try_block_cache(unsigned long long inode, unsigned long long blocknr,
 			//then the record in block cache will be deleted
             inobno.inode = inode;
             inobno.blocknr = blk->blocknr;
+			buf = s_malloc(blk->blksize);
+			memcpy(buf, blk->blockdata, blk->blksize);
             if (NULL != config->blockdatabs) {
-                db_commit_block(blk->blockdata, inobno, blk->offset);
+                db_commit_block(buf, inobno, blk->blksize, blk->offset);
             } else {
-                file_commit_block(blk->blockdata, inobno, blk->offset);
+                file_commit_block(buf, inobno, blk->offset);
             }
 			//delete the found block in cache
             mdelete_key(blkcache, &inode, sizeof(unsigned long long));
@@ -2441,7 +2447,7 @@ unsigned long long try_blocknr_cache(unsigned long long inode)
 		inobno.inode = inode;
 		inobno.blocknr = blocknr;
         if (NULL != config->blockdatabs) {
-            db_commit_block(blk->blockdata, inobno, blk->offset);
+            db_commit_block(blk->blockdata, inobno, blk->blksize, blk->offset);
         } else {
             file_commit_block(blk->blockdata, inobno, blk->offset);
         }
@@ -2489,7 +2495,7 @@ void db_update_block(const char *blockdata, unsigned long long blocknr,
     if (NULL != data) {
         memcpy(dbdata, data->data, data->size);
         memcpy(dbdata + offsetblock, blockdata, size);
-        add_blk_to_cache(inode, blocknr, dbdata, offset);
+        add_blk_to_cache(inode, blocknr, offsetblock + size, dbdata, offset);
         update_filesize(inode, size, offsetblock, blocknr, 0, 0, 0);
         free(dbdata);
         DBTfree(data);
@@ -2580,7 +2586,7 @@ void db_update_block(const char *blockdata, unsigned long long blocknr,
     }
 	//if offset block > 0, this is appending.
     memcpy(dbdata + offsetblock, blockdata, size);
-    add_blk_to_cache(inode, blocknr, dbdata, offset);
+    add_blk_to_cache(inode, blocknr, offsetblock + size, dbdata, offset);
     inuse = getInUse(chksum);
     if (inuse <= 1) {
         delete_inuse(chksum);
@@ -2812,7 +2818,6 @@ DBT *check_block_exists(INOBNO inobno)
 #endif
                 data = offhash_to_ddbuf(offhash);
 				free(offhash);
-				offhash = NULL;
             } else {
                 LDEBUG("check_block_exists : %llu-%llu not found",
                        inobno.inode, inobno.blocknr);
@@ -3212,7 +3217,7 @@ void partial_truncate_block(struct stat *stbuf, unsigned long long blocknr,
     } else {
         memcpy(blockdata, data->data, offset);
     }
-    db_commit_block(blockdata, inobno, offsetfile);
+    db_commit_block(blockdata, inobno, offset, offsetfile);
     free(stiger);
     DBTfree(data);
     free(blockdata);
@@ -3596,7 +3601,6 @@ unsigned long long get_blocknr(unsigned long long inode, off_t offset)
 			return --blocknr;
 		blocknr++;
 		inobno.blocknr = blocknr;
-		DBTfree(data);
 		data = NULL;
 	}
 }

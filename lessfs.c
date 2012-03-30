@@ -695,7 +695,7 @@ redo:
             done = done + got - block_offset;
         } 
 		else if (got == 0) {
-	        done += size < BLKSIZE? size : BLKSIZE;
+	        done += (size - done) < BLKSIZE? (size - done) : BLKSIZE;
 	        LDEBUG("lessfs_read : sparse block %llu-%llu offset %llu size %llu",
                 fi->fh,blocknr,(unsigned long long) offset,(unsigned long long) size);
     	}
@@ -760,7 +760,7 @@ int fsp_write(const char *path, const char *buf, size_t size,
 		  memcpy((char *) blkdta->blockdata, data->data, data->size);
 		  memcpy((char *) blkdta->blockdata + offsetblock, buf + done,
 				 bsize);
-		  add_blk_to_cache(inobno.inode, inobno.blocknr,
+		  add_blk_to_cache(inobno.inode, inobno.blocknr, offsetblock + bsize, 
 						   (unsigned char *) blkdta->blockdata, offsetfile);
 		  update_filesize(inobno.inode, bsize, offsetblock, blocknr, 0, 0,
 						  0);
@@ -823,25 +823,31 @@ int sb_write(const char *path, const char *buf, size_t size, off_t offset,
 	unsigned long long inode;
 	size_t doublesize, bufsize, patchsize, done;
 	BUFCACHE *cache;
+	unsigned char *addbuf;
 
 	tiger_lock();
 	done = 0;
 	inode = fi->fh;
 	doublesize = BLKSIZE * 2;
+	addbuf = s_malloc(doublesize);
 	
 	while(done < size){
 		if (offset == 0 || NULL == (cache = try_buf_cache(inode))){
 			if (size >= done + doublesize){
 				//deal with the buf
 				if (0 != (patchsize = sb_addblock(buf + done, offset + done, 
-					doublesize, inode)))
-					add_buf_to_bufcache(buf + (done + doublesize - patchsize), 
-						patchsize, inode, offset + (done + doublesize - patchsize));
+					doublesize, inode))){
+					memcpy(addbuf, buf + (done + doublesize - patchsize), 
+						patchsize);
+					add_buf_to_bufcache(addbuf, patchsize, inode, 
+						offset + (done + doublesize - patchsize));
+				}
 				done += doublesize;
 				continue;
 			}
 			else{
-				add_buf_to_bufcache(buf + done, size - done, inode, offset + done);
+				memcpy(addbuf, buf + done, size - done);
+				add_buf_to_bufcache(addbuf, size - done, inode, offset + done);
 				done = size;
 			}
 		}
@@ -851,24 +857,28 @@ int sb_write(const char *path, const char *buf, size_t size, off_t offset,
 				memcpy(cache->buf + bufsize, buf + done, doublesize - bufsize);
 				//deal with the buf
 				if (0 != (patchsize = sb_addblock(cache->buf, cache->offset, 
-					doublesize, inode)))
-					add_buf_to_bufcache(
-						buf + (done + doublesize - patchsize - bufsize), 
-						patchsize, inode, 
+					doublesize, inode))){
+					memcpy(addbuf, buf + (done + doublesize - patchsize - bufsize), 
+						patchsize);
+					add_buf_to_bufcache(addbuf, patchsize, inode, 
 						offset + (done + doublesize - patchsize - bufsize));
+				}
 				done += doublesize - bufsize;
 				if (NULL != cache)
 					free(cache);
 				continue;
 			}
 			else{
-				add_buf_to_bufcache(buf + done, size - done, inode, cache->offset);
+				memcpy(cache->buf + bufsize, buf + done, size - done);
+				add_buf_to_bufcache(cache->buf, bufsize + (size - done), inode, 
+					cache->offset);
 				done = size;
 				if (NULL != cache)
-					free(cache);				
+					free(cache);
 			}
 		}
 	}
+	free(addbuf);
 	release_tiger_lock();
 	return done;
 }
@@ -879,7 +889,7 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 	int head, tail, fragsize;
 	unsigned long long checksumusage, stigerusage;
 	int blksize = BLKSIZE;
-	unsigned char *checkbuf, *fragbuf;
+	unsigned char *fullbuf, *fragbuf;
 	unsigned int key;
 	unsigned char *stiger;
 	INOBNO inobno;
@@ -894,18 +904,17 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 	tail = bufsize;
 	inobno.inode = inode;
 	inobno.blocknr = try_blocknr_cache(inode);
-	fragbuf = s_malloc(blksize);
-	checkbuf = s_malloc(blksize);
+	fullbuf = s_malloc(blksize);
 	while (head <= tail - blksize){
-		memcpy(checkbuf, buf + head, blksize);
+		memcpy(fullbuf, buf + head, blksize);
 		//check the buf
-		key = (head == 0)? checksum(checkbuf, blksize) : 
+		key = (head == 0)? checksum(fullbuf, blksize) : 
 			rolling_checksum(key, blksize, buf[head - 1], buf[head + blksize]);
 		if (0 != (checksumusage = checksum_exists(key))){
 #ifdef SHA3
-            stiger=sha_binhash(checkbuf, blksize);
+            stiger=sha_binhash(fullbuf, blksize);
 #else
-            binhash(checkbuf, blksize, res);
+            binhash(fullbuf, blksize, res);
             stiger = (unsigned char *)&res;
 #endif
 			if (0 != (stigerusage = getInUse(stiger))){
@@ -913,26 +922,18 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 				free(stiger);
 #endif
 				if (head > 0){
+					fragbuf = s_malloc(head);
 					memcpy(fragbuf, buf, head);
-#ifdef SHA3
-		            stiger=sha_binhash(fragbuf, head);
-#else
-		            binhash(fragbuf, head, res);
-		            stiger = (unsigned char *)&res;
-#endif
-					if(0 != (stigerusage = getInUse(stiger))){
-						deduplicated = 1;
-					}
-#ifdef SHA3
-					free(stiger);
-#endif
+					
 			        if (NULL != config->blockdatabs) {
-			            db_commit_block(fragbuf, inobno, offset);
+			            db_commit_block(fragbuf, inobno, head, offset);
 			        } else {
 			            file_commit_block(fragbuf, inobno, offset);
 			        }
 					if (head == blksize)
-						update_checksum_inuse(adler32_checksum(fragbuf, blksize), 1);
+						update_checksum_inuse(adler32_checksum(fragbuf, blksize), 
+							1);
+					free(fragbuf);
 					update_filesize(inode, head, offsetblock, inobno.blocknr, 
 						sparse, compressed, deduplicated);
 					inobno.blocknr++;
@@ -940,11 +941,10 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 				}
 				deduplicated = 1;
 				update_checksum_inuse(key, ++checksumusage);
-				add_blk_to_cache(inode, inobno.blocknr, checkbuf, offset);
+				add_blk_to_cache(inode, inobno.blocknr, blksize, fullbuf, offset);
 				update_filesize(inode, blksize, offsetblock, inobno.blocknr, 
 					sparse, compressed, deduplicated);
-				free(fragbuf);
-				free(checkbuf);
+				free(fullbuf);
 				return blksize - head;
 			}
 #ifdef SHA3
@@ -956,12 +956,12 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 	
 	//add the two blocks	
 	if (head != 0){
-		memcpy(fragbuf, buf, blksize);
-		update_checksum_inuse(checksum(fragbuf, blksize), 1);
+		memcpy(fullbuf, buf, blksize);
+		update_checksum_inuse(checksum(fullbuf, blksize), 1);
 		if (NULL != config->blockdatabs) {
-			db_commit_block(fragbuf, inobno, offset);
+			db_commit_block(fullbuf, inobno, blksize, offset);
 		} else {
-			file_commit_block(fragbuf, inobno, offset);
+			file_commit_block(fullbuf, inobno, offset);
 		}
 		update_filesize(inode, blksize, offsetblock, inobno.blocknr, 
 			sparse, compressed, deduplicated);
@@ -973,14 +973,13 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 		fragsize = bufsize;
 		offsetbuf = 0;
 	}
-	memcpy(fragbuf, buf + offsetbuf, fragsize);
+	memcpy(fullbuf, buf + offsetbuf, fragsize);
 	if (fragsize == blksize)
-		update_checksum_inuse(checksum(fragbuf, fragsize), 1);
-	add_blk_to_cache(inode, inobno.blocknr, fragbuf, offset);
+		update_checksum_inuse(checksum(fullbuf, fragsize), 1);
+	add_blk_to_cache(inode, inobno.blocknr, fragsize, fullbuf, offset);
 	update_filesize(inode, fragsize, offsetblock, inobno.blocknr, 
 		sparse, compressed, deduplicated);
-	free(fragbuf);
-	free(checkbuf);
+	free(fullbuf);
 	return 0;
 }
 

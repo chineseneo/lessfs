@@ -251,8 +251,9 @@ void add_file_block(BLKDTA * blkdta)
         cachedata = try_block_cache(blkdta->inode, blkdta->blocknr, 0);
         if (cachedata)
             DBTfree(cachedata);
-        add_blk_to_cache(blkdta->inode, blkdta->blocknr,
-                         blkdta->blockfiller, blkdta->offsetfile);
+        add_blk_to_cache(blkdta->inode, blkdta->blocknr, 
+			blkdta->bsize + blkdta->offsetblock, blkdta->blockfiller, 
+			blkdta->offsetfile);
         LDEBUG
             ("add_file_block : wrote with add_blk_to_cache  : inode %llu - %llu size %i",
              inobno.inode, inobno.blocknr, blkdta->bsize);
@@ -600,7 +601,7 @@ void file_update_block(const char *blockdata, unsigned long long blocknr,
         LDEBUG("try_block_cache : HIT");
         memcpy(dbdata, data->data, data->size);
         memcpy(dbdata + offsetblock, blockdata, size);
-        add_blk_to_cache(inode, blocknr, dbdata, offset);
+        add_blk_to_cache(inode, blocknr, offsetblock + size, dbdata, offset);
         update_filesize(inode, size, offsetblock, blocknr, 0, 0, 0);
         free(dbdata);
         DBTfree(data);
@@ -681,7 +682,7 @@ void file_update_block(const char *blockdata, unsigned long long blocknr,
         DBTfree(data);
     }
     memcpy(dbdata + offsetblock, blockdata, size);
-    add_blk_to_cache(inode, blocknr, dbdata, offset);
+    add_blk_to_cache(inode, blocknr, offsetblock + size, dbdata, offset);
     inuse = file_get_inuse(chksum);
     if (NULL == inuse)
         die_dataerr("file_update_block : hash not found");

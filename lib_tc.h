@@ -66,6 +66,7 @@ typedef struct {
 typedef struct {
 	unsigned long long blocknr;
 	off_t offset;
+	size_t blksize;
 	unsigned char blockdata[MAX_FUSE_BLKSIZE];
 } BLKCACHE;
 
@@ -216,7 +217,7 @@ int inode_block_pending(unsigned long long, unsigned long long);
 DBT *try_block_cache(unsigned long long, unsigned long long, unsigned int);
 BUFCACHE *try_buf_cache(unsigned long long);
 void flush_dta_queue();
-void add_blk_to_cache(unsigned long long, unsigned long long,
+void add_blk_to_cache(unsigned long long, unsigned long long, size_t, 
                       unsigned char *, off_t);
 void add_buf_to_cache(unsigned char *, unsigned long long, off_t);
 void qdta(unsigned char *, DBT *);
