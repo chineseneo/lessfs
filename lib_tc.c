@@ -1273,6 +1273,9 @@ unsigned long long readBlock(unsigned long long blocknr, const char *filename,
     INOBNO inobno;
 	OFFHASH *offhash;
     BLKCACHE *blk;
+	off_t offset1, offset2;
+	int blksize;
+	DDSTAT *ddstat;
 #ifndef SHA3
     word64 res[3];
 #endif
@@ -1361,7 +1364,21 @@ unsigned long long readBlock(unsigned long long blocknr, const char *filename,
 #endif
     }
     release_moddb_lock();
-    if (decrypted->size != BLKSIZE) {
+	offset1 = offhash->offset;
+	if (NULL == (offhash = get_offhash(inode, ++blocknr))){
+		if (NULL == (data = search_dbdata(dbp, &inode, sizeof(unsigned long long))))
+			offset2 = offset1 + decrypted->size;
+		else {
+			ddstat = value_to_ddstat(data);
+			offset2 = ddstat->stbuf.st_size;
+			free(ddstat);
+		}
+	} else {
+		offset2 = offhash->offset;
+		free(offhash);
+	}
+	blksize = offset2 - offset1;
+    if (decrypted->size != blksize) {
 #ifdef LZO
         uncompdata = lzo_decompress(decrypted->data, decrypted->size);
 #else
@@ -1537,8 +1554,7 @@ void DBTfree(DBT * data)
 {
     if (data) {
         if (data->data)
-            if (data->data)
-                free(data->data);
+			free(data->data);
         free(data);
     }
     data = NULL;
