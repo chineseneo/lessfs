@@ -150,6 +150,7 @@ int check_path_sanity(const char *path)
 void dbsync()
 {
     tcbdbsync(dbdirent);
+    tcbdbsync(dbr);
     tchdbsync(dbu);
 	tchdbsync(dbc);
     tchdbsync(dbb);
@@ -674,7 +675,7 @@ static int lessfs_read(const char *path, char *buf, size_t size,
     memset(buf, 0, size);
     blocknr = get_blocknr(fi->fh, offset);
 	offhash = get_offhash(fi->fh, blocknr);
-    block_offset = (done + offset) - offhash->offset;
+    block_offset = offset - offhash->offset;
 redo:
     memset(tmpbuf, 0, BLKSIZE + 1);
     LDEBUG("lessfs_read called offset : %llu, size bytes %llu",
@@ -699,8 +700,9 @@ redo:
 	        LDEBUG("lessfs_read : sparse block %llu-%llu offset %llu size %llu",
                 fi->fh,blocknr,(unsigned long long) offset,(unsigned long long) size);
     	}
-		blocknr++;
-		block_offset = 0;
+	    blocknr = get_blocknr(fi->fh, offset + done);
+		offhash = get_offhash(fi->fh, blocknr);
+	    block_offset = offset - offhash->offset;
     }
     free(tmpbuf);
     release_global_lock();
@@ -762,8 +764,6 @@ int fsp_write(const char *path, const char *buf, size_t size,
 				 bsize);
 		  add_blk_to_cache(inobno.inode, inobno.blocknr, offsetblock + bsize, 
 						   (unsigned char *) blkdta->blockdata, offsetfile);
-		  update_filesize(inobno.inode, bsize, offsetblock, blocknr, 0, 0,
-						  0);
 		  DBTfree(data);
 		  res = 2;
 	  } else
@@ -858,10 +858,10 @@ int sb_write(const char *path, const char *buf, size_t size, off_t offset,
 				//deal with the buf
 				if (0 != (patchsize = sb_addblock(cache->buf, cache->offset, 
 					doublesize, inode))){
-					memcpy(addbuf, buf + (done + doublesize - patchsize - bufsize), 
+					memcpy(addbuf, buf + (done + doublesize - patchsize) - bufsize, 
 						patchsize);
 					add_buf_to_bufcache(addbuf, patchsize, inode, 
-						offset + (done + doublesize - patchsize - bufsize));
+						offset + (done + doublesize - patchsize) - bufsize);
 				}
 				done += doublesize - bufsize;
 				if (NULL != cache)
@@ -909,7 +909,7 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 		memcpy(fullbuf, buf + head, blksize);
 		//check the buf
 		key = (head == 0)? checksum(fullbuf, blksize) : 
-			rolling_checksum(key, blksize, buf[head - 1], buf[head + blksize]);
+			rolling_checksum(key, blksize, buf[head - 1], buf[head + blksize - 1]);
 		if (0 != (checksumusage = checksum_exists(key))){
 #ifdef SHA3
             stiger=sha_binhash(fullbuf, blksize);
@@ -934,16 +934,11 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 						update_checksum_inuse(adler32_checksum(fragbuf, blksize), 
 							1);
 					free(fragbuf);
-					update_filesize(inode, head, offsetblock, inobno.blocknr, 
-						sparse, compressed, deduplicated);
 					inobno.blocknr++;
 					offset += head;
 				}
-				deduplicated = 1;
 				update_checksum_inuse(key, ++checksumusage);
 				add_blk_to_cache(inode, inobno.blocknr, blksize, fullbuf, offset);
-				update_filesize(inode, blksize, offsetblock, inobno.blocknr, 
-					sparse, compressed, deduplicated);
 				free(fullbuf);
 				return blksize - head;
 			}
@@ -957,28 +952,28 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 	//add the two blocks	
 	if (head != 0){
 		memcpy(fullbuf, buf, blksize);
-		update_checksum_inuse(checksum(fullbuf, blksize), 1);
-		if (NULL != config->blockdatabs) {
-			db_commit_block(fullbuf, inobno, blksize, offset);
-		} else {
-			file_commit_block(fullbuf, inobno, offset);
-		}
-		update_filesize(inode, blksize, offsetblock, inobno.blocknr, 
-			sparse, compressed, deduplicated);
-		inobno.blocknr++;
-		offset += blksize;
 		fragsize = bufsize - blksize;
+		update_checksum_inuse(checksum(fullbuf, blksize), 1);
+		if (fragsize == blksize)
+			add_blk_to_cache(inode, inobno.blocknr, blksize,fullbuf, offset);
+		else
+			if (NULL != config->blockdatabs) {
+				db_commit_block(fullbuf, inobno, blksize, offset);
+			} else {
+				file_commit_block(fullbuf, inobno, offset);
+			}
+		inobno.blocknr++;
 		offsetbuf = blksize;
+		offset += blksize;
 	} else {
 		fragsize = bufsize;
 		offsetbuf = 0;
 	}
 	memcpy(fullbuf, buf + offsetbuf, fragsize);
 	if (fragsize == blksize)
-		update_checksum_inuse(checksum(fullbuf, fragsize), 1);
-	add_blk_to_cache(inode, inobno.blocknr, fragsize, fullbuf, offset);
-	update_filesize(inode, fragsize, offsetblock, inobno.blocknr, 
-		sparse, compressed, deduplicated);
+		add_buf_to_bufcache(fullbuf, blksize, inode, offset);
+	else
+		add_blk_to_cache(inode, inobno.blocknr, fragsize, fullbuf, offset);
 	free(fullbuf);
 	return 0;
 }
@@ -1014,6 +1009,10 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
     DBT *ddbuf;
     DBT *data;
 	BUFCACHE *cache;
+	unsigned long long blocknr, dedupblocknr;
+	char *ext;
+	unsigned len;
+	double ratio;	
 
     FUNC;
 // Finish pending i/o for this inode.
@@ -1049,6 +1048,20 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
                    (float) memddstat->stbuf.st_size /
                    memddstat->lzo_compressed_size);
             LDEBUG("lessfs_release : Delete cache for %llu", fi->fh);
+			if (memddstat->updated == memddstat->blocknr + 1) {
+				if (NULL == (ext = getextension(&len, path))){
+					len = 4;
+					ext = malloc(len);
+					memcpy(ext, "none", len);
+				}
+				dedupblocknr = memddstat->deduplicated;
+				blocknr = memddstat->blocknr + 1;
+				blocknr = (blocknr == 0)? 1:blocknr;
+				ratio = dedupblocknr / blocknr;
+	    		btbin_write_dup(dbr, ext, len, &ratio, 
+	    			sizeof(double));
+				free(ext);
+			}
             mdelete_key(dbcache, &fi->fh, sizeof(unsigned long long));
             if ( NULL == config->blockdatabs) fdatasync(fdbdta);
         }
@@ -1264,6 +1277,10 @@ void *housekeeping_worker(void *arg)
             freeze_nospace(dbpath);
         free(dbpath);
         dbpath = as_sprintf("%s/dirent.tcb", config->dirent);
+        if (0 != check_free_space(dbpath))
+            freeze_nospace(dbpath);
+        free(dbpath);
+        dbpath = as_sprintf("%s/ratio.tcb", config->ratio);
         if (0 != check_free_space(dbpath))
             freeze_nospace(dbpath);
         free(dbpath);
@@ -1579,6 +1596,7 @@ void *lessfs_flush(void *arg)
         /* Make sure that the meta data is updated every once in a while */
         if ( config->relax > 0 ) {
            tcbdbsync(dbdirent);
+           tcbdbsync(dbr);
            tcbdbsync(dbl);
            tchdbsync(dbp);
            tchdbsync(dbs);

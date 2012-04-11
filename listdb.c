@@ -322,6 +322,29 @@ void listdirent()
     tcbdbcurdel(cur);
 }
 
+void listratio()
+{
+    BDBCUR *cur;
+    char *key, *value;
+    int keysize, valuesize;
+	double ratio;
+
+    /* traverse records */
+    cur = tcbdbcurnew(dbr);
+    tcbdbcurfirst(cur);
+    while ((key = tcbdbcurkey(cur, &keysize)) != NULL) {
+        value = tcbdbcurval(cur, &valuesize);;
+        if (value) {
+            memcpy(&ratio, value, sizeof(double));
+				printf("%s : %.10f\n", key, ratio);
+            free(value);
+        }
+        free(key);
+        tcbdbcurnext(cur);
+    }
+    tcbdbcurdel(cur);
+}
+
 int main(int argc, char *argv[])
 {
     if (argc < 2)
@@ -347,6 +370,8 @@ int main(int argc, char *argv[])
     listdbb();
     printf("\n\ndbdirent\n");
     listdirent();
+    printf("\n\ndbr\n");
+    listratio();
     printf("\n\ndbs (symlinks)\n");
     list_symlinks();
     printf("\n\ndbl (hardlinks)\n");

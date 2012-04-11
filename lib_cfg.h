@@ -28,6 +28,8 @@ struct configdata {
 	char *checksumusagebs;
     char *dirent;
     char *direntbs;
+	char *ratio;
+	char *ratiobs;
     char *fileblock;
     char *fileblockbs;
     char *meta;

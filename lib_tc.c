@@ -80,6 +80,7 @@ TCBDB *dbl = NULL;              // Hardlink
 TCHDB *dbs = NULL;              // Symlink
 TCHDB *dbdta = NULL;
 TCBDB *dbdirent = NULL;
+TCBDB *dbr = NULL;
 TCBDB *freelist = NULL;         // Free list for file_io
 TCMDB *dbcache;
 TCMDB *dbdtaq;
@@ -276,6 +277,9 @@ void tc_defrag()
         (dbdirent, 0, 0, atol(config->direntbs), -1, -1, BDBTLARGE))
         LDEBUG("dirent.tcb not optimized");
     if (!tcbdboptimize
+        (dbr, 0, 0, atol(config->ratiobs), -1, -1, BDBTLARGE))
+        LDEBUG("ratio.tcb not optimized");
+    if (!tcbdboptimize
         (dbl, 0, 0, atol(config->hardlinkbs), -1, -1, BDBTLARGE))
         LDEBUG("hardlink.tcb not optimized");
 }
@@ -367,6 +371,24 @@ void tc_open(bool defrag, bool createpath)
         die_dberr("open error: %s", tcbdberrmsg(ecode));
     }
     free(dbpath);
+	
+    dbr = tcbdbnew();
+    tcbdbtune(dbr, 0, 0, atol(config->ratiobs), -1, -1, BDBTLARGE);
+    /* The dirent database is a B-TREE DB with cursors */
+    dbpath = as_sprintf("%s/ratio.tcb", config->ratio);
+    if ( createpath ) mkpath(config->ratio,0744);
+    if (config->defrag == 1) {
+        if (!tcbdbsetdfunit(dbr, 1)) {
+            ecode = tcbdbecode(dbr);
+            die_dberr("set defrag error: %s", tcbdberrmsg(ecode));
+        }
+    }
+    LDEBUG("Open database %s", dbpath);
+    if (!tcbdbopen(dbr, dbpath, BDBOWRITER | BDBOCREAT)) {
+        ecode = tcbdbecode(dbr);
+        die_dberr("open error: %s", tcbdberrmsg(ecode));
+    }
+    free(dbpath);
 
     dbl = tcbdbnew();
     tcbdbtune(dbl, 0, 0, atol(config->hardlinkbs), -1, -1, BDBTLARGE);
@@ -382,7 +404,7 @@ void tc_open(bool defrag, bool createpath)
         }
     }
     if (!tcbdbopen(dbl, dbpath, BDBOWRITER | BDBOCREAT)) {
-        ecode = tcbdbecode(dbdirent);
+        ecode = tcbdbecode(dbl);
         die_dberr("open error: %s", tcbdberrmsg(ecode));
     }
     free(dbpath);
@@ -456,6 +478,14 @@ void tc_close(bool defrag)
     }
     /* delete the object */
     tcbdbdel(dbdirent);
+
+    /* close the B-TREE database */
+    if (!tcbdbclose(dbr)) {
+        ecode = tcbdbecode(dbr);
+        die_dberr("close error: %s", tchdberrmsg(ecode));
+    }
+    /* delete the object */
+    tcbdbdel(dbr);
 
     /* close the B-TREE database */
     if (!tcbdbclose(dbl)) {
@@ -1211,7 +1241,6 @@ OFFHASH *buf_to_offhash(DBT *data)
 	
 	offhash = s_malloc(data->size);
 	memcpy(offhash, data->data, data->size);
-	DBTfree(data);
     return offhash;
 }
 
@@ -1973,8 +2002,6 @@ void addBlock(BLKDTA * blkdta)
         LDEBUG
             ("addBlock : wrote with add_blk_to_cache  : inode %llu - %llu size %i",
              inobno.inode, inobno.blocknr, blkdta->bsize);
-        update_filesize(blkdta->inode, blkdta->bsize, blkdta->offsetblock,
-                        blkdta->blocknr, blkdta->sparse, 0, 0);
         return;
     }
 
@@ -2170,9 +2197,7 @@ void update_filesize(unsigned long long inode, unsigned long long fsize,
     }
     // The file size has grown or the block is sparse.
     if (!sparse) {
-        if (memddstat->stbuf.st_size < (blocknr * BLKSIZE) + fsize + offsetblock){
-            memddstat->stbuf.st_size = fsize + offsetblock + (blocknr * BLKSIZE);
-        }
+        memddstat->stbuf.st_size += fsize;
         if (memddstat->stbuf.st_size > (512 * memddstat->stbuf.st_blocks)) {
             memddstat->stbuf.st_blocks = memddstat->stbuf.st_blocks + addblocks;
             LDEBUG
@@ -2330,8 +2355,11 @@ unsigned int db_commit_block(unsigned char *dbdata, INOBNO inobno,
     if (0 == inuse) {
         loghash("commit_block : write hash with qdta", stiger);
         qdta(stiger, (DBT *) compressed);
+        update_filesize(inobno.inode, datasize, 0, inobno.blocknr, 0, 
+			compressed->size, 0);
     } else
-        loghash("commit_block : only updated inuse for hash ", stiger);
+        update_filesize(inobno.inode, datasize, 0, inobno.blocknr, 0,
+        	compressed->size, 1);
     inuse++;
     update_inuse(stiger, inuse);
     comprfree(compressed);
@@ -2512,7 +2540,6 @@ void db_update_block(const char *blockdata, unsigned long long blocknr,
         memcpy(dbdata, data->data, data->size);
         memcpy(dbdata + offsetblock, blockdata, size);
         add_blk_to_cache(inode, blocknr, offsetblock + size, dbdata, offset);
-        update_filesize(inode, size, offsetblock, blocknr, 0, 0, 0);
         free(dbdata);
         DBTfree(data);
         return;
@@ -2611,7 +2638,6 @@ void db_update_block(const char *blockdata, unsigned long long blocknr,
         inuse--;
         update_inuse(chksum, inuse);
     }
-    update_filesize(inode, size, offsetblock, blocknr, 0, 0, 0);
     free(dbdata);
     EFUNC;
     return;
@@ -3594,7 +3620,7 @@ unsigned long long get_blocknr(unsigned long long inode, off_t offset)
 {
 	unsigned long long blocknr;
 	DBT *data;
-	OFFHASH *offhash;
+	OFFHASH *offhash = NULL;
 	INOBNO inobno;
 
 	blocknr = 0;
@@ -3609,15 +3635,17 @@ unsigned long long get_blocknr(unsigned long long inode, off_t offset)
 				return blocknr;
 			else return --blocknr;
 		}
-		free(offhash);
+		if (offhash)
+			free(offhash);
 		offhash = buf_to_offhash(data);
+		DBTfree(data);
+		data = NULL;
 		if (offhash->offset == offset)
 			return blocknr;
 		if (offhash->offset > offset)
 			return --blocknr;
 		blocknr++;
 		inobno.blocknr = blocknr;
-		data = NULL;
 	}
 }
 
@@ -3628,11 +3656,15 @@ OFFHASH *get_offhash(unsigned long long inode, unsigned long long blocknr)
 {
 	DBT *data;
 	INOBNO inobno;
+	OFFHASH *offhash;
 
 	inobno.inode = inode;
 	inobno.blocknr = blocknr;
-	if (NULL != (data = check_block_exists(inobno)))
-		return buf_to_offhash(data);
+	if (NULL != (data = check_block_exists(inobno))){
+		offhash = buf_to_offhash(data);
+		DBTfree(data);
+		return offhash;
+	}
 	return NULL;
 }
 
@@ -4349,14 +4381,14 @@ void parseconfig(int mklessfs)
     if (NULL == iv) {
         config->blockdata_io_type = "tokyocabinet";
         config->blockdatabs = read_val("BLOCKDATA_BS");
-        LINFO("The selected data store is tokyocabinet.");
+        LDEBUG("The selected data store is tokyocabinet.");
     } else {
         if (0 == strncasecmp(iv, "file_io", strlen("file_io"))) {
             config->blockdata_io_type = "file_io";
             config->blockdatabs = NULL;
             config->freelist = read_val("FREELIST_PATH");
             config->freelistbs = read_val("FREELIST_BS");
-            LINFO("The selected data store is file_io.");
+            LDEBUG("The selected data store is file_io.");
         } else
             config->blockdatabs = read_val("BLOCKDATA_BS");
     }
@@ -4366,6 +4398,8 @@ void parseconfig(int mklessfs)
 	config->checksumusagebs = read_val("CHECKSUMUSAGE_BS");
     config->dirent = read_val("DIRENT_PATH");
     config->direntbs = read_val("DIRENT_BS");
+    config->ratio= read_val("RATIO_PATH");
+    config->ratiobs= read_val("RATIO_BS");
     config->fileblock = read_val("FILEBLOCK_PATH");
     config->fileblockbs = read_val("FILEBLOCK_BS");
     config->meta = read_val("META_PATH");
@@ -4386,14 +4420,14 @@ void parseconfig(int mklessfs)
            exit(EXIT_USAGE);
        }
     }
-    LINFO("Lessfs uses a %i bytes long hash.", config->hashlen);
+    LDEBUG("Lessfs uses a %i bytes long hash.", config->hashlen);
     iv = getenv("SYNC_RELAX");
     if (NULL == iv) {
         config->relax = 0;
     } else {
         config->relax = atoi(iv);
         if (0 != config->relax) {
-            LINFO
+            LDEBUG
                 ("Lessfs fsync does not sync the databases to the disk when fsync is called on an inode");
         }
     }
@@ -4411,7 +4445,7 @@ void parseconfig(int mklessfs)
         }
     }
     if (config->defrag)
-        LINFO("Automatic defragmentation is enabled.");
+        LDEBUG("Automatic defragmentation is enabled.");
     cache = read_val("CACHESIZE");
     if (NULL != cache)
         cs = atoi(cache);
@@ -4424,12 +4458,12 @@ void parseconfig(int mklessfs)
     if (cs <= 0)
         cs = 30;
     config->flushtime = cs;
-    LINFO("cache %u data blocks", config->cachesize);
+    LDEBUG("cache %u data blocks", config->cachesize);
 
 #ifdef SHA3
-    LINFO("The Blue Midnight Wish hash has been selected.");
+    LDEBUG("The Blue Midnight Wish hash has been selected.");
 #else
-    LINFO("The tiger hash has been selected.");
+    LDEBUG("The tiger hash has been selected.");
 #endif
     if (mklessfs == 1) {
         dbpath = as_sprintf("%s/fileblock.tch", config->fileblock);
@@ -4455,10 +4489,10 @@ void parseconfig(int mklessfs)
             if (0 == strcasecmp(iv, "ON")) {
                 config->encryptdata = 1;
                 iv = getenv("ENCRYPT_META");
-                LINFO("Data encryption is on");
+                LDEBUG("Data encryption is on");
                 if (NULL != iv) {
                     if (0 != strcasecmp(iv, "ON")) {
-                        LINFO("Metadata encryption is off");
+                        LDEBUG("Metadata encryption is off");
                         config->encryptmeta = 0;
                     }
                 }
@@ -4596,7 +4630,7 @@ int get_blocksize()
 	  	LDEBUG("%s: stiger=%s, inuse=%llu", __FUNCTION__, stiger, inuse);
       	if ( 0 == inuse ) {
          	brand_blocksize();
-		 	LINFO("%s: BLKSIZE = %d", __FUNCTION__, BLKSIZE);
+		 	LDEBUG("%s: BLKSIZE = %d", __FUNCTION__, BLKSIZE);
          	blksize=BLKSIZE;
       	} else {
          	blksize=inuse;
@@ -4676,6 +4710,9 @@ void drop_databases()
    if (-1 != stat(dbpath, &stbuf) ) unlink(dbpath);
    free(dbpath);
    dbpath = as_sprintf("%s/dirent.tcb", config->dirent);
+   if (-1 != stat(dbpath, &stbuf) ) unlink(dbpath);
+   free(dbpath);
+   dbpath = as_sprintf("%s/ratio.tcb", config->ratio);
    if (-1 != stat(dbpath, &stbuf) ) unlink(dbpath);
    free(dbpath);
    dbpath = as_sprintf("%s/hardlink.tcb", config->hardlink);
