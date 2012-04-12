@@ -1973,8 +1973,6 @@ void addBlock(BLKDTA * blkdta)
         LDEBUG
             ("addBlock : wrote with add_blk_to_cache  : inode %llu - %llu size %i",
              inobno.inode, inobno.blocknr, blkdta->bsize);
-        update_filesize(blkdta->inode, blkdta->bsize, blkdta->offsetblock,
-                        blkdta->blocknr, blkdta->sparse, 0, 0);
         return;
     }
 
@@ -2328,8 +2326,13 @@ unsigned int db_commit_block(unsigned char *dbdata, INOBNO inobno,
     if (0 == inuse) {
         loghash("commit_block : write hash with qdta", stiger);
         qdta(stiger, (DBT *) compressed);
-    } else
+		update_filesize(inobno.inode, datasize, 0, inobno.blocknr, 0, 
+			compressed->size, 0);
+    } else {
+		update_filesize(inobno.inode, datasize, 0, inobno.blocknr, 0, 
+			0, 1);
         loghash("commit_block : only updated inuse for hash ", stiger);
+    }
     inuse++;
     update_inuse(stiger, inuse);
     comprfree(compressed);
@@ -2510,7 +2513,6 @@ void db_update_block(const char *blockdata, unsigned long long blocknr,
         memcpy(dbdata, data->data, data->size);
         memcpy(dbdata + offsetblock, blockdata, size);
         add_blk_to_cache(inode, blocknr, offsetblock + size, dbdata, offset);
-        update_filesize(inode, size, offsetblock, blocknr, 0, 0, 0);
         free(dbdata);
         DBTfree(data);
         return;
@@ -2609,7 +2611,6 @@ void db_update_block(const char *blockdata, unsigned long long blocknr,
         inuse--;
         update_inuse(chksum, inuse);
     }
-    update_filesize(inode, size, offsetblock, blocknr, 0, 0, 0);
     free(dbdata);
     EFUNC;
     return;

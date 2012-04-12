@@ -762,8 +762,6 @@ int fsp_write(const char *path, const char *buf, size_t size,
 				 bsize);
 		  add_blk_to_cache(inobno.inode, inobno.blocknr, offsetblock + bsize, 
 						   (unsigned char *) blkdta->blockdata, offsetfile);
-		  update_filesize(inobno.inode, bsize, offsetblock, blocknr, 0, 0,
-						  0);
 		  DBTfree(data);
 		  res = 2;
 	  } else
@@ -934,16 +932,12 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 						update_checksum_inuse(adler32_checksum(fragbuf, blksize), 
 							1);
 					free(fragbuf);
-					update_filesize(inode, head, offsetblock, inobno.blocknr, 
-						sparse, compressed, deduplicated);
 					inobno.blocknr++;
 					offset += head;
 				}
 				deduplicated = 1;
 				update_checksum_inuse(key, ++checksumusage);
 				add_blk_to_cache(inode, inobno.blocknr, blksize, fullbuf, offset);
-				update_filesize(inode, blksize, offsetblock, inobno.blocknr, 
-					sparse, compressed, deduplicated);
 				free(fullbuf);
 				return blksize - head;
 			}
@@ -963,8 +957,6 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 		} else {
 			file_commit_block(fullbuf, inobno, offset);
 		}
-		update_filesize(inode, blksize, offsetblock, inobno.blocknr, 
-			sparse, compressed, deduplicated);
 		inobno.blocknr++;
 		offset += blksize;
 		fragsize = bufsize - blksize;
@@ -977,8 +969,6 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 	if (fragsize == blksize)
 		update_checksum_inuse(checksum(fullbuf, fragsize), 1);
 	add_blk_to_cache(inode, inobno.blocknr, fragsize, fullbuf, offset);
-	update_filesize(inode, fragsize, offsetblock, inobno.blocknr, 
-		sparse, compressed, deduplicated);
 	free(fullbuf);
 	return 0;
 }
