@@ -2170,9 +2170,7 @@ void update_filesize(unsigned long long inode, unsigned long long fsize,
     }
     // The file size has grown or the block is sparse.
     if (!sparse) {
-        if (memddstat->stbuf.st_size < (blocknr * BLKSIZE) + fsize + offsetblock){
-            memddstat->stbuf.st_size = fsize + offsetblock + (blocknr * BLKSIZE);
-        }
+        memddstat->stbuf.st_size += fsize;
         if (memddstat->stbuf.st_size > (512 * memddstat->stbuf.st_blocks)) {
             memddstat->stbuf.st_blocks = memddstat->stbuf.st_blocks + addblocks;
             LDEBUG

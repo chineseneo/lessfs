@@ -909,7 +909,7 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 		memcpy(fullbuf, buf + head, blksize);
 		//check the buf
 		key = (head == 0)? checksum(fullbuf, blksize) : 
-			rolling_checksum(key, blksize, buf[head - 1], buf[head + blksize]);
+			rolling_checksum(key, blksize, buf[head - 1], buf[head + blksize - 1]);
 		if (0 != (checksumusage = checksum_exists(key))){
 #ifdef SHA3
             stiger=sha_binhash(fullbuf, blksize);
