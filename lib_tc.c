@@ -3593,7 +3593,7 @@ unsigned long long get_blocknr(unsigned long long inode, off_t offset)
 {
 	unsigned long long blocknr;
 	DBT *data;
-	OFFHASH *offhash;
+	OFFHASH *offhash = NULL;
 	INOBNO inobno;
 
 	blocknr = 0;
@@ -3604,6 +3604,8 @@ unsigned long long get_blocknr(unsigned long long inode, off_t offset)
 			return blocknr;
 		data = check_block_exists(inobno);
 		if (NULL == data){
+			if (offhash == NULL)
+				return blocknr;
 			if (offhash->offset + BLKSIZE <= offset)
 				return blocknr;
 			else return --blocknr;

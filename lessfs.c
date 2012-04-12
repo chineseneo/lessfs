@@ -828,7 +828,8 @@ int sb_write(const char *path, const char *buf, size_t size, off_t offset,
 	inode = fi->fh;
 	doublesize = BLKSIZE * 2;
 	addbuf = s_malloc(doublesize);
-	
+
+	get_global_lock();
 	while(done < size){
 		if (offset == 0 || NULL == (cache = try_buf_cache(inode))){
 			if (size >= done + doublesize){
@@ -877,6 +878,7 @@ int sb_write(const char *path, const char *buf, size_t size, off_t offset,
 		}
 	}
 	free(addbuf);
+	release_global_lock();
 	release_tiger_lock();
 	return done;
 }
@@ -901,7 +903,8 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 	head = 0;
 	tail = bufsize;
 	inobno.inode = inode;
-	inobno.blocknr = try_blocknr_cache(inode);
+	if (0 == (inobno.blocknr = try_blocknr_cache(inode)))
+		inobno.blocknr = get_blocknr(inode, offset);
 	fullbuf = s_malloc(blksize);
 	while (head <= tail - blksize){
 		memcpy(fullbuf, buf + head, blksize);
@@ -939,7 +942,7 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 				update_checksum_inuse(key, ++checksumusage);
 				add_blk_to_cache(inode, inobno.blocknr, blksize, fullbuf, offset);
 				free(fullbuf);
-				return blksize - head;
+				return tail - head - blksize;
 			}
 #ifdef SHA3
 			free(stiger);
@@ -1004,6 +1007,8 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
     DBT *ddbuf;
     DBT *data;
 	BUFCACHE *cache;
+	size_t patchsize;
+	unsigned long long blocknr, offset;
 
     FUNC;
 // Finish pending i/o for this inode.
@@ -1014,7 +1019,14 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
         memddstat = (MEMDDSTAT *) dataptr->data;
         if (memddstat->opened == 1) {
 			if (NULL != (cache = try_buf_cache(fi->fh))){
-				sb_addblock(cache->buf, cache->offset, cache->bufsize, cache->inode);
+				if (0 != (patchsize = sb_addblock(cache->buf, cache->offset, 
+					cache->bufsize, cache->inode))){
+					offset = cache->offset + cache->bufsize - patchsize;
+					if (0 == (blocknr = try_blocknr_cache(fi->fh)))
+						blocknr = get_blocknr(fi->fh, offset);
+					add_blk_to_cache(fi->fh, blocknr, patchsize, cache->buf + 
+						cache->bufsize - patchsize,	offset);
+				}
 				free(cache);
 			}
 // Flush blocks in cache that where not written yet, if any.
