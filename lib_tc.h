@@ -239,6 +239,7 @@ void delete_dbb(INOBNO *);
 void write_dbb_to_cache(INOBNO *, OFFHASH *);
 void clear_dirty();
 int get_blocksize();
+size_t get_blksize(unsigned long long, unsigned long long);
 unsigned long long get_blocknr(unsigned long long, off_t);
 OFFHASH *get_offhash(unsigned long long, unsigned long long);
 void brand_blocksize();

@@ -2168,7 +2168,7 @@ void update_filesize(unsigned long long inode, unsigned long long fsize,
     if (!sparse && offhash && (offhash->offset + offsetblock + fsize) <=
         memddstat->stbuf.st_size) {
         memddstat->stbuf.st_size += offsetblock + fsize;
-		memddstat->stbuf.st_size -= get_blocksize(inode, blocknr);
+		memddstat->stbuf.st_size -= get_blksize(inode, blocknr);
         inobno.inode = inode;
         inobno.blocknr = blocknr;
         tigerdata = check_block_exists(inobno);
@@ -3663,7 +3663,7 @@ unsigned long long get_blocknr(unsigned long long inode, off_t offset)
 /*
  * find and return the blocknr 
  */
-size_t get_blocksize(unsigned long long inode, 
+size_t get_blksize(unsigned long long inode, 
 						unsigned long long blocknr)
 {
 	DBT *data = NULL;
