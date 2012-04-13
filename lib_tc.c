@@ -1411,6 +1411,20 @@ void delete_inuse(unsigned char *stiger)
 }
 
 /*
+ * this happens when deleting a block of which the inuse is 1 
+ * delete the inuse entry in dbum and dbu
+ */
+void delete_checksum_inuse(unsigned int key)
+{
+	LDEBUG("%s: key=%u", __FUNCTION__, key);
+    get_dbc_lock();
+		tcmdbout(dbccache, &key, sizeof(unsigned int));
+        tcmdbout(dbcm, &key, sizeof(unsigned int));
+        tchdbout(dbc, &key, sizeof(unsigned int));
+    release_dbc_lock();
+}
+
+/*
  * this happens when deleting the block of a file, 
  * the inode and blocknr of the block will be given, 
  * and delete the ino-blocknr entry in dbbm and dbb
@@ -2126,6 +2140,7 @@ void update_filesize(unsigned long long inode, unsigned long long fsize,
     DBT *ddbuf;
     int addblocks;
     INOBNO inobno;
+	OFFHASH *offhash = NULL;
 
     FUNC;
     LDEBUG("%s : inode %llu fsize %llu offset %u blocknet %llu bool %c", 
@@ -2149,8 +2164,11 @@ void update_filesize(unsigned long long inode, unsigned long long fsize,
         memddstat->stbuf.st_size + fsize)
         addblocks++;
     // The file has not grown in size. block is being updated in the file.
-    if (!sparse && ((blocknr * BLKSIZE) + offsetblock + fsize) <=
+    offhash = get_offhash(inode, blocknr);
+    if (!sparse && offhash && (offhash->offset + offsetblock + fsize) <=
         memddstat->stbuf.st_size) {
+        memddstat->stbuf.st_size += offsetblock + fsize;
+		memddstat->stbuf.st_size -= get_blocksize(inode, blocknr);
         inobno.inode = inode;
         inobno.blocknr = blocknr;
         tigerdata = check_block_exists(inobno);
@@ -2952,6 +2970,11 @@ int db_unlink_file(const char *path)
     DINOINO dinoino;
     INOBNO inobno;
     char *filename;
+	OFFHASH *offhash;
+	unsigned char *block;
+	size_t blksize;
+	unsigned int key;
+	unsigned long long checksuminuse;
 
     FUNC;
 
@@ -2988,11 +3011,15 @@ int db_unlink_file(const char *path)
 	{
 	    inobno.inode = inode;
 	    inobno.blocknr = counter;
+		block = s_malloc(BLKSIZE + 1);
 
 	    while (done < st.st_size) {
 			//search for dbb entry
 	        get_dbb_lock();
-	        bdata = search_memhash(dbbm, &inobno, sizeof(INOBNO));
+	        bdata = search_memhash(dbbcache, &inobno, sizeof(INOBNO));
+	        if ( NULL == bdata ) {
+				bdata = search_memhash(dbbm, &inobno, sizeof(INOBNO));
+	        }
 	        if ( NULL == bdata ) {
 				bdata = search_dbdata(dbb, &inobno, sizeof(INOBNO));
 	        }
@@ -3005,9 +3032,19 @@ int db_unlink_file(const char *path)
 	            inobno.blocknr = counter;
 	            continue;
 	        }
+			if (BLKSIZE == (blksize = readBlock(inobno.blocknr, path, block, inode))){
+				key = adler32_checksum(block, (int)blksize);
+				checksuminuse = checksum_exists(key);
+				if (checksuminuse > 1)
+					update_checksum_inuse(key, --checksuminuse);
+				else {
+					delete_checksum_inuse(key);
+				}
+			}
 			//get the hash of the inode-blocknr
-	        stiger = s_malloc(bdata->size);
-	        memcpy(stiger, bdata->data, bdata->size);
+			offhash = (OFFHASH *) bdata->data;
+	        stiger = s_malloc(config->hashlen);
+	        memcpy(stiger, offhash->stiger, config->hashlen);
 	        loghash("search inuse for ", stiger);
 	        inuse = getInUse(stiger);
 	        LDEBUG("inuse=%llu", inuse);
@@ -3032,8 +3069,9 @@ int db_unlink_file(const char *path)
 	        delete_dbb(&inobno);
 	        counter++;
 	        inobno.blocknr = counter;
-	        done = done + BLKSIZE;
+	        done = done + blksize;
 	    }
+		free(block);
         if (0 !=
             (res = btdelete_curkey(dbdirent, 
              				&dirst.st_ino, sizeof(unsigned long long), 
@@ -3620,6 +3658,52 @@ unsigned long long get_blocknr(unsigned long long inode, off_t offset)
 		inobno.blocknr = blocknr;
 		data = NULL;
 	}
+}
+
+/*
+ * find and return the blocknr 
+ */
+size_t get_blocksize(unsigned long long inode, 
+						unsigned long long blocknr)
+{
+	DBT *data = NULL;
+	DDSTAT *ddstat;
+	MEMDDSTAT *memddstat;
+	BLKCACHE *cache;
+	OFFHASH *offhash1 = NULL, *offhash2 = NULL;
+	INOBNO inobno;
+	size_t blocksize = 0;
+
+	inobno.inode = inode;
+	inobno.blocknr = blocknr;
+	if (NULL != (data = search_memhash(blkcache, &inode, 
+										sizeof(unsigned long long)))){
+		cache = (BLKCACHE *) data->data;
+		blocksize = cache->blksize;
+	}
+	else if (NULL != (offhash1 = get_offhash(inode, blocknr))){
+		if (NULL != (offhash2 = get_offhash(inode, ++blocknr)))
+			blocksize = offhash2->offset - offhash1->offset;
+		else {
+			if (NULL != (data = search_memhash(dbcache, &inode, 
+												sizeof(unsigned long long)))){
+				memddstat = value_tomem_ddstat((char *)data->data, data->size);
+				blocksize = memddstat->stbuf.st_size - offhash1->offset;
+				free(memddstat);
+			}
+			else if (NULL != (data = search_dbdata(dbp, &inode, 
+												sizeof(unsigned long long)))){
+				ddstat = value_to_ddstat(data);
+				blocksize = ddstat->stbuf.st_size - offhash1->offset;
+				free(ddstat);
+			}
+			else
+				die_dataerr("Fatal: can get the block size of %llu-%llu, quit.", 
+					inode, blocknr);
+		}
+	}
+	DBTfree(data);
+	return blocksize;
 }
 
 /*

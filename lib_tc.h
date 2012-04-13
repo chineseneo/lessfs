@@ -234,6 +234,7 @@ int sync_flush_dbu();
 int sync_flush_dbc();
 int sync_flush_dbb();
 void delete_inuse(unsigned char *);
+void delete_checksum_inuse(unsigned int);
 void delete_dbb(INOBNO *);
 void write_dbb_to_cache(INOBNO *, OFFHASH *);
 void clear_dirty();
