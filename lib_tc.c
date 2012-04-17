@@ -1509,17 +1509,16 @@ unsigned long long checksum_exists(unsigned int key)
 	return counter;
 }
 
-double check_ratio(char *ext, int len)
+int check_ratio(char *ext, int len)
 {
-	double ratio;
 	DBT *data;
 
 	data = search_memhash(dbrcache, (void *) ext, len);
 	if (data == NULL)
 		return 0;
-	memcpy(&ratio, data->data, data->size);
-	DBTfree(data);
-	return ratio;
+	else
+		DBTfree(data);
+	return 1;
 }
 
 void read_dbc()
@@ -1696,12 +1695,14 @@ void update_checksum_inuse(unsigned int key, unsigned long long inuse)
 void update_ratio(char *key, int len, double ratio)
 {
     if (ratio > 0 && ratio < 1) {
-		mbin_write_dbdata(dbrcache, key, len, (void *) &ratio, sizeof(double));
+		mbin_write_dbdata(dbrcache, (void *) key, len, (unsigned char *) &ratio, 
+			sizeof(double));
         if ( dbr_qcount > METAQSIZE ) {
             sync_flush_dbr();
         }
         get_dbr_lock();
-        mbin_write_dbdata(dbrm, key, len, (void *) &ratio, sizeof(double));
+        mbin_write_dbdata(dbrm, (void *) key, len, (unsigned char *) &ratio, 
+			sizeof(double));
         dbr_qcount++;
         release_dbr_lock();
     }

@@ -715,6 +715,21 @@ redo:
 static int lessfs_write(const char *path, const char *buf, size_t size,
                         off_t offset, struct fuse_file_info *fi)
 {
+	if (dedup == 0) {
+		int len;
+		char *ext = getextension(&len, path);
+		if (ext == NULL) {
+			len = 5;
+			ext = malloc(len);
+			memcpy(ext, "none\0", len);
+		}
+		int ratio = check_ratio(ext, len);
+		if (0 < ratio) {
+			return sb_write(path, buf, size, offset, fi);
+		}
+		else
+			return fsp_write(path, buf, size, offset, fi);
+	}
 	if (dedup == 1)
 		return fsp_write(path, buf, size, offset, fi);
 	else
@@ -1042,9 +1057,9 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
 				DDSTAT *ddstat = value_to_ddstat(data);
 				if (ddstat->stbuf.st_size == 0) {
 					if (NULL == (ext = getextension(&len, path))){
-						len = 4;
+						len = 5;
 						ext = malloc(len);
-						memcpy(ext, "none", len);
+						memcpy(ext, "none\0", len);
 					}
 					dedupblocknr = memddstat->deduplicated;
 					blocknr = get_blocknr(inode, memddstat->stbuf.st_size);
@@ -2010,7 +2025,7 @@ int get_opts(int argc, char *argv[])
         case 'b':
 			return 3;
         default:
-			return 0;
+			usage(argv[0]);
     }
     return 0;
 }
