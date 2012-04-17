@@ -1970,6 +1970,8 @@ void addBlock(BLKDTA * blkdta)
     INOBNO inobno;
 	OFFHASH *offhash;
     DBT *cachedata = NULL;
+	unsigned int key;
+	unsigned long long checksumusage;
 
     inobno.inode = blkdta->inode;
     inobno.blocknr = blkdta->blocknr;
@@ -1989,6 +1991,12 @@ void addBlock(BLKDTA * blkdta)
              inobno.inode, inobno.blocknr, blkdta->bsize);
         return;
     }
+
+	if (blkdta->bsize + blkdta->offsetblock == BLKSIZE){
+		key = adler32_checksum(blkdta->blockfiller, BLKSIZE);
+		checksumusage = checksum_exists(key);
+		update_checksum_inuse(key, ++checksumusage);
+	}
 
     inuse = getInUse(blkdta->stiger);
     if (inuse == 0) {
@@ -2319,6 +2327,8 @@ unsigned int db_commit_block(unsigned char *dbdata, INOBNO inobno,
     unsigned long long inuse;
     unsigned int ret = 0;
 	OFFHASH *offhash;
+	unsigned int key;
+	unsigned long long checksumusage;
 #ifndef SHA3 
     word64 res[3];
 #endif
@@ -2333,6 +2343,11 @@ unsigned int db_commit_block(unsigned char *dbdata, INOBNO inobno,
     binhash(dbdata, datasize, res);
     stiger=(unsigned char *)&res;
 #endif
+	if (datasize == BLKSIZE){
+		key = adler32_checksum(dbdata, datasize);
+		checksumusage = checksum_exists(key);
+		update_checksum_inuse(key, ++checksumusage);
+	}
 //compress the block
 #ifdef LZO
     compressed = lzo_compress((unsigned char *) dbdata, datasize);
@@ -3629,6 +3644,8 @@ unsigned long long get_inode(const char *path)
  */
 unsigned long long get_blocknr(unsigned long long inode, off_t offset)
 {
+	DDSTAT *ddstat;
+	DBT *metadata;
 	unsigned long long blocknr;
 	DBT *data;
 	OFFHASH *offhash = NULL;
@@ -3642,13 +3659,14 @@ unsigned long long get_blocknr(unsigned long long inode, off_t offset)
 			return blocknr;
 		data = check_block_exists(inobno);
 		if (NULL == data){
-			if (offhash == NULL)
+			if (NULL == (metadata = search_dbdata(dbp, &inode, 
+													sizeof(unsigned long long))))
 				return blocknr;
-			if (offhash->offset + BLKSIZE <= offset)
-				return blocknr;
-			else return --blocknr;
+			else 
+				return --blocknr;
 		}
-		free(offhash);
+		if (offhash)
+			free(offhash);
 		offhash = buf_to_offhash(data);
 		if (offhash->offset == offset)
 			return blocknr;

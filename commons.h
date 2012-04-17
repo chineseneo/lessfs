@@ -11,6 +11,7 @@ char *logname;
 char *function=__FILE__;
 int debug = 5;
 int BLKSIZE = 4096;
+int dedup = 3;
 #define MAX_THREADS 1
 int max_threads = MAX_THREADS;
 BLKDTA **tdta = NULL;

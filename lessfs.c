@@ -714,8 +714,10 @@ redo:
 static int lessfs_write(const char *path, const char *buf, size_t size,
                         off_t offset, struct fuse_file_info *fi)
 {
-	return sb_write(path, buf, size, offset, fi);
-	//return fsp_write(path, buf, size, offset, fi);
+	if (dedup == 1)
+		return fsp_write(path, buf, size, offset, fi);
+	else
+		return sb_write(path, buf, size, offset, fi);
 }
 
 int fsp_write(const char *path, const char *buf, size_t size,
@@ -857,10 +859,10 @@ int sb_write(const char *path, const char *buf, size_t size, off_t offset,
 				//deal with the buf
 				if (0 != (patchsize = sb_addblock(cache->buf, cache->offset, 
 					doublesize, inode))){
-					memcpy(addbuf, buf + (done + doublesize - patchsize - bufsize), 
+					memcpy(addbuf, cache->buf + (doublesize - patchsize), 
 						patchsize);
 					add_buf_to_bufcache(addbuf, patchsize, inode, 
-						offset + (done + doublesize - patchsize - bufsize));
+						cache->offset + (doublesize - patchsize));
 				}
 				done += doublesize - bufsize;
 				if (NULL != cache)
@@ -890,10 +892,9 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 	unsigned long long checksumusage, stigerusage;
 	int blksize = BLKSIZE;
 	unsigned char *fullbuf, *fragbuf;
-	unsigned int key;
+	unsigned int key, offsetbuf;
 	unsigned char *stiger;
 	INOBNO inobno;
-	unsigned int offsetblock = 0, compressed = 0, deduplicated = 0, offsetbuf;
 	bool sparse = 0;
 	
 #ifndef SHA3
@@ -931,15 +932,10 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 			        } else {
 			            file_commit_block(fragbuf, inobno, offset);
 			        }
-					if (head == blksize)
-						update_checksum_inuse(adler32_checksum(fragbuf, blksize), 
-							1);
 					free(fragbuf);
 					inobno.blocknr++;
 					offset += head;
 				}
-				deduplicated = 1;
-				update_checksum_inuse(key, ++checksumusage);
 				add_blk_to_cache(inode, inobno.blocknr, blksize, fullbuf, offset);
 				free(fullbuf);
 				return tail - head - blksize;
@@ -954,7 +950,12 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 	//add the two blocks	
 	if (head != 0){
 		memcpy(fullbuf, buf, blksize);
-		update_checksum_inuse(checksum(fullbuf, blksize), 1);
+		fragsize = bufsize - blksize;
+		if (dedup == 2 && fragsize == blksize) {
+			add_blk_to_cache(inobno.inode, inobno.blocknr, blksize, fullbuf, offset);
+			free(fullbuf);
+			return blksize;
+		}
 		if (NULL != config->blockdatabs) {
 			db_commit_block(fullbuf, inobno, blksize, offset);
 		} else {
@@ -962,15 +963,12 @@ int sb_addblock(unsigned char *buf, off_t offset, unsigned int bufsize,
 		}
 		inobno.blocknr++;
 		offset += blksize;
-		fragsize = bufsize - blksize;
 		offsetbuf = blksize;
 	} else {
 		fragsize = bufsize;
 		offsetbuf = 0;
 	}
 	memcpy(fullbuf, buf + offsetbuf, fragsize);
-	if (fragsize == blksize)
-		update_checksum_inuse(checksum(fullbuf, fragsize), 1);
 	add_blk_to_cache(inode, inobno.blocknr, fragsize, fullbuf, offset);
 	free(fullbuf);
 	return 0;
@@ -1951,29 +1949,52 @@ int verify_kernel_version()
     return (0);
 }
 
+int get_opts(int argc, char *argv[])
+{
+    int c;
+
+    while ((c = getopt (argc, argv, "fsb")) != -1)
+		switch (c)
+        {
+        case 'f':
+			return 1;
+        case 's':
+			return 2;
+        case 'b':
+			return 3;
+        default:
+			return 0;
+    }
+    return 0;
+}
+
 int main(int argc, char *argv[])
 {
     int res;
     char *p, *maxwrite, *maxread;
     char **argv_new = (char **) malloc(argc * sizeof(char *));
-    int argc_new = argc - 1;
+    int argc_new;
+	char *opt;
+	int pos = 1;
     struct rlimit lessfslimit;
 
     FUNC;
-    if ((argc > 1) && (strcmp(argv[1], "-h") == 0)) {
+    if ((argc == 2) && (strcmp(argv[1], "-h") == 0)) {
         usage(argv[0]);
     }
 
     if (argc < 3) {
         usage(argv[0]);
     }
-
-    if (-1 == r_env_cfg(argv[1]))
+	if (0 != (dedup = get_opts(argc, argv)))
+		pos = 2;
+	argc_new = argc - pos;
+    if (-1 == r_env_cfg(argv[pos]))
         usage(argv[0]);
     argv_new[0] = argv[0];
     int i;
-    for (i = 1; i < argc - 1; i++) {
-        argv_new[i] = argv[i + 1];
+    for (i = 1; i < argc - pos; i++) {
+        argv_new[i] = argv[i + pos];
         if (NULL != strstr(argv[i + 1], "big_writes")) {
             maxwrite = strstr(argv[i + 1], "max_write=");
             maxread = strstr(argv[i + 1], "max_read=");
