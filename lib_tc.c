@@ -75,6 +75,7 @@ extern char *passwd;
 TCHDB *dbb = NULL;
 TCHDB *dbu = NULL;
 TCHDB *dbc = NULL;
+TCHDB *dbr = NULL;
 TCHDB *dbp = NULL;
 TCBDB *dbl = NULL;              // Hardlink
 TCHDB *dbs = NULL;              // Symlink
@@ -86,16 +87,19 @@ TCMDB *dbdtaq;
 TCMDB *blkcache;                // A cache that has the tiger hash as key and the fs data as value.
 TCMDB *bufcache; 
 TCMDB *dbccache;
+TCMDB *dbrcache;
 TCMDB *dbucache;
 TCMDB *dbbcache;
 TCMDB *dbum;
 TCMDB *dbcm;
+TCMDB *dbrm;
 TCMDB *dbbm;
 int fdbdta = 0;
 
 unsigned long long nextoffset = 0;
 unsigned int dbu_qcount = 0;
 unsigned int dbc_qcount = 0;
+unsigned int dbr_qcount = 0;
 unsigned int dbb_qcount = 0;
 int written = 0;
 static pthread_mutex_t global_lock_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -108,6 +112,7 @@ static pthread_mutex_t qempty_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_spinlock_t moddb_spinlock;
 pthread_spinlock_t dbu_spinlock;
 pthread_spinlock_t dbc_spinlock;
+pthread_spinlock_t dbr_spinlock;
 pthread_spinlock_t dbb_spinlock;
 
 #ifdef i386
@@ -260,6 +265,8 @@ void tc_defrag()
         LDEBUG("blockusage.tch not optimized");
     if (!tchdboptimize(dbc, atol(config->checksumusagebs), 0, 0, HDBTLARGE))
         LDEBUG("blockusage.tch not optimized");
+    if (!tchdboptimize(dbr, atol(config->ratiobs), 0, 0, HDBTLARGE))
+        LDEBUG("ratio.tch not optimized");
     if (!tchdboptimize(dbp, atol(config->metabs), 0, 0, HDBTLARGE))
         LDEBUG("metadata.tcb not optimized");
     if (!tchdboptimize(dbs, atol(config->symlinkbs), 0, 0, HDBTLARGE))
@@ -306,6 +313,12 @@ void tc_open(bool defrag, bool createpath)
     if ( createpath ) mkpath(config->checksumusage,0744);
     LDEBUG("Open database %s", dbpath);
     dbc = hashdb_open(dbpath, 2621440, atol(config->checksumusagebs));
+    free(dbpath);
+
+    dbpath = as_sprintf("%s/ratio.tch", config->ratio);
+    if ( createpath ) mkpath(config->ratio,0744);
+    LDEBUG("Open database %s", dbpath);
+    dbr = hashdb_open(dbpath, 2621440, atol(config->ratiobs));
     free(dbpath);
 
     dbpath = as_sprintf("%s/metadata.tcb", config->meta);
@@ -382,7 +395,7 @@ void tc_open(bool defrag, bool createpath)
         }
     }
     if (!tcbdbopen(dbl, dbpath, BDBOWRITER | BDBOCREAT)) {
-        ecode = tcbdbecode(dbdirent);
+        ecode = tcbdbecode(dbl);
         die_dberr("open error: %s", tcbdberrmsg(ecode));
     }
     free(dbpath);
@@ -391,11 +404,13 @@ void tc_open(bool defrag, bool createpath)
         dbbm = tcmdbnew();
         dbum = tcmdbnew();
         dbcm = tcmdbnew();
+        dbrm = tcmdbnew();
         dbcache = tcmdbnew();
         dbdtaq = tcmdbnew();
         blkcache = tcmdbnew();
 		bufcache = tcmdbnew();
 		dbccache = tcmdbnew();	
+		dbrcache = tcmdbnew();	
 		dbucache = tcmdbnew();	
 		dbbcache = tcmdbnew();	
 		
@@ -436,6 +451,7 @@ void tc_close(bool defrag)
     hashdb_close(dbp);
     hashdb_close(dbu);
     hashdb_close(dbc);
+    hashdb_close(dbr);
     hashdb_close(dbs);
     if (NULL != config->blockdatabs) {
         hashdb_close(dbdta);
@@ -470,10 +486,12 @@ void tc_close(bool defrag)
         tcmdbdel(dbbm);
         tcmdbdel(dbum);
         tcmdbdel(dbcm);
+        tcmdbdel(dbrm);
         tcmdbdel(dbdtaq);
         tcmdbdel(blkcache);
 		tcmdbdel(bufcache);
         tcmdbdel(dbccache);
+        tcmdbdel(dbrcache);
 		tcmdbdel(dbucache);
 		tcmdbdel(dbbcache);
         if (NULL == config->blockdatabs) {
@@ -527,6 +545,14 @@ void get_dbc_lock()
 {
     FUNC;
     pthread_spin_lock(&dbc_spinlock);
+    EFUNC;
+    return;
+}
+
+void get_dbr_lock()
+{
+    FUNC;
+    pthread_spin_lock(&dbr_spinlock);
     EFUNC;
     return;
 }
@@ -592,6 +618,12 @@ void release_dbu_lock()
 void release_dbc_lock()
 {
     pthread_spin_unlock(&dbc_spinlock);
+    return;
+}
+
+void release_dbr_lock()
+{
+    pthread_spin_unlock(&dbr_spinlock);
     return;
 }
 
@@ -1477,6 +1509,19 @@ unsigned long long checksum_exists(unsigned int key)
 	return counter;
 }
 
+double check_ratio(char *ext, int len)
+{
+	double ratio;
+	DBT *data;
+
+	data = search_memhash(dbrcache, (void *) ext, len);
+	if (data == NULL)
+		return 0;
+	memcpy(&ratio, data->data, data->size);
+	DBTfree(data);
+	return ratio;
+}
+
 void read_dbc()
 {
     unsigned int *kdata;
@@ -1496,6 +1541,34 @@ void read_dbc()
         }
         mbin_write_dbdata(dbccache, kdata, ksize, vdata, vsize);
         release_dbc_lock();
+        free(kdata);
+        free(vdata);
+		count++;
+    }
+	LDEBUG("%s: %d records", __FUNCTION__, count);
+    EFUNC;
+    return;
+}
+
+void read_dbr()
+{
+    char *kdata;
+    double *vdata;
+    int ksize;
+    int vsize;
+    int count=0;
+	
+    FUNC;
+    tchdbiterinit(dbr);
+    while ((kdata = tchdbiternext(dbr, &ksize)) != NULL) {
+        get_dbr_lock();
+        vdata = tchdbget(dbr, kdata, ksize, &vsize);
+        if (NULL == vdata) {
+            release_dbr_lock();
+            continue;
+        }
+        mbin_write_dbdata(dbrcache, kdata, ksize, vdata, vsize);
+        release_dbr_lock();
         free(kdata);
         free(vdata);
 		count++;
@@ -1614,6 +1687,23 @@ void update_checksum_inuse(unsigned int key, unsigned long long inuse)
 			(unsigned char *) &inuse, sizeof(unsigned long long));
         dbc_qcount++;
         release_dbc_lock();
+    }
+    return;
+}
+
+/*
+ */
+void update_ratio(char *key, int len, double ratio)
+{
+    if (ratio > 0 && ratio < 1) {
+		mbin_write_dbdata(dbrcache, key, len, (void *) &ratio, sizeof(double));
+        if ( dbr_qcount > METAQSIZE ) {
+            sync_flush_dbr();
+        }
+        get_dbr_lock();
+        mbin_write_dbdata(dbrm, key, len, (void *) &ratio, sizeof(double));
+        dbr_qcount++;
+        release_dbr_lock();
     }
     return;
 }
@@ -3478,15 +3568,48 @@ int sync_flush_dbc()
     tcmdbiterinit(dbcm);
     while ((kdata = tcmdbiternext(dbcm, &ksize)) != NULL) {
         get_dbc_lock();
-           vdata = tcmdbget(dbcm, kdata, ksize, &vsize);
-           if (NULL == vdata) {
-               release_dbc_lock();
-               continue;
-           }
-           bin_write_dbdata(dbc, kdata, ksize, vdata, vsize);
-           mdelete_key(dbcm, kdata, ksize);
-           dbc_qcount--;
+        vdata = tcmdbget(dbcm, kdata, ksize, &vsize);
+        if (NULL == vdata) {
+            release_dbc_lock();
+            continue;
+        }
+        bin_write_dbdata(dbc, kdata, ksize, vdata, vsize);
+        mdelete_key(dbcm, kdata, ksize);
+        dbc_qcount--;
         release_dbc_lock();
+        ret=1;
+        free(kdata);
+        free(vdata);
+    }
+    EFUNC;
+    return(ret);
+}
+
+/*
+ * flush the data in dbum to dbu, and clear dbum
+ */
+int sync_flush_dbr()
+{
+    unsigned char *kdata;
+    unsigned char *vdata;
+    int ksize;
+    int vsize;
+    int ret=0;
+
+    FUNC;
+
+    tcmdbiterinit(dbrm);
+    while ((kdata = tcmdbiternext(dbrm, &ksize)) != NULL) {
+        get_dbr_lock();
+        vdata = tcmdbget(dbrm, kdata, ksize, &vsize);
+        if (NULL == vdata) {
+            release_dbr_lock();
+            continue;
+        }
+        bin_write_dbdata(dbr, kdata, ksize, vdata, vsize);
+        mdelete_key(dbrm, kdata, ksize);
+        dbr_qcount--;
+        release_dbr_lock();
         ret=1;
         free(kdata);
         free(vdata);
@@ -3659,11 +3782,15 @@ unsigned long long get_blocknr(unsigned long long inode, off_t offset)
 			return blocknr;
 		data = check_block_exists(inobno);
 		if (NULL == data){
-			if (NULL == (metadata = search_dbdata(dbp, &inode, 
-													sizeof(unsigned long long))))
-				return blocknr;
-			else 
-				return --blocknr;
+			if (NULL != (metadata = search_dbdata(dbp, &inode, 
+													sizeof(unsigned long long)))){
+				ddstat = value_to_ddstat(metadata);
+				if (ddstat->stbuf.st_size == 0)
+					return blocknr;
+				else return --blocknr;
+			}
+			else
+				die_dberr("no file info of inode %llu found in dbp", inode);
 		}
 		if (offhash)
 			free(offhash);
@@ -4467,6 +4594,8 @@ void parseconfig(int mklessfs)
     config->blockusagebs = read_val("BLOCKUSAGE_BS");
 	config->checksumusage = read_val("CHECKSUMUSAGE_PATH");
 	config->checksumusagebs = read_val("CHECKSUMUSAGE_BS");
+	config->ratio = read_val("RATIO_PATH");
+	config->ratiobs = read_val("RATIO_BS");
     config->dirent = read_val("DIRENT_PATH");
     config->direntbs = read_val("DIRENT_BS");
     config->fileblock = read_val("FILEBLOCK_PATH");
@@ -4779,6 +4908,9 @@ void drop_databases()
    if (-1 != stat(dbpath, &stbuf) ) unlink(dbpath);
    free(dbpath);
    dbpath = as_sprintf("%s/dirent.tcb", config->dirent);
+   if (-1 != stat(dbpath, &stbuf) ) unlink(dbpath);
+   free(dbpath);
+   dbpath = as_sprintf("%s/ratio.tcb", config->ratio);
    if (-1 != stat(dbpath, &stbuf) ) unlink(dbpath);
    free(dbpath);
    dbpath = as_sprintf("%s/hardlink.tcb", config->hardlink);

@@ -150,6 +150,7 @@ int check_path_sanity(const char *path)
 void dbsync()
 {
     tcbdbsync(dbdirent);
+    tchdbsync(dbr);
     tchdbsync(dbu);
 	tchdbsync(dbc);
     tchdbsync(dbb);
@@ -1006,23 +1007,27 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
     DBT *data;
 	BUFCACHE *cache;
 	size_t patchsize;
-	unsigned long long blocknr, offset;
+	unsigned long long inode, blocknr, offset, dedupblocknr;
+	char *ext;
+	int len;
+	double ratio;
 
     FUNC;
 // Finish pending i/o for this inode.
     open_lock();
     wait_io_pending(fi->fh);
+	inode = fi->fh;
     dataptr = search_memhash(dbcache, &fi->fh, sizeof(unsigned long long));
     if (dataptr != NULL) {
         memddstat = (MEMDDSTAT *) dataptr->data;
         if (memddstat->opened == 1) {
-			if (NULL != (cache = try_buf_cache(fi->fh))){
+			if (NULL != (cache = try_buf_cache(inode))){
 				if (0 != (patchsize = sb_addblock(cache->buf, cache->offset, 
 					cache->bufsize, cache->inode))){
 					offset = cache->offset + cache->bufsize - patchsize;
-					if (0 == (blocknr = try_blocknr_cache(fi->fh)))
-						blocknr = get_blocknr(fi->fh, offset);
-					add_blk_to_cache(fi->fh, blocknr, patchsize, cache->buf + 
+					if (0 == (blocknr = try_blocknr_cache(inode)))
+						blocknr = get_blocknr(inode, offset);
+					add_blk_to_cache(inode, blocknr, patchsize, cache->buf + 
 						cache->bufsize - patchsize,	offset);
 				}
 				free(cache);
@@ -1032,6 +1037,25 @@ static int lessfs_release(const char *path, struct fuse_file_info *fi)
             if (data != NULL)
                 die_syserr();
             sync_flush_dtaq();
+			if (NULL != (data = search_dbdata(dbp, &inode, 
+												sizeof(unsigned long long)))) {
+				DDSTAT *ddstat = value_to_ddstat(data);
+				if (ddstat->stbuf.st_size == 0) {
+					if (NULL == (ext = getextension(&len, path))){
+						len = 4;
+						ext = malloc(len);
+						memcpy(ext, "none", len);
+					}
+					dedupblocknr = memddstat->deduplicated;
+					blocknr = get_blocknr(inode, memddstat->stbuf.st_size);
+					blocknr = (blocknr == 0)? 1:blocknr;
+					ratio = (double)dedupblocknr / (double)blocknr;
+					update_ratio(ext, len, ratio);
+					free(ext);
+				}
+				free(ddstat);
+				DBTfree(data);
+			}
 // Update the filesize when needed.
             update_filesize_onclose(fi->fh);
 #ifdef x86_64
@@ -1202,6 +1226,23 @@ void *flush_dbc_worker(void *arg)
    {
       LDEBUG("flush_dbc_worker : call sync_flush_dbu"); 
       done=sync_flush_dbc();
+      if ( done == 0 ){
+         sleeptime=config->flushtime;
+      } else {
+         sleeptime=sleeptime/2;
+      }
+      sleep(sleeptime);
+   } 
+}
+
+void *flush_dbr_worker(void *arg)
+{
+   int sleeptime=config->flushtime;
+   int done;
+   while(1)
+   {
+      LDEBUG("flush_dbr_worker : call sync_flush_dbr"); 
+      done=sync_flush_dbr();
       if ( done == 0 ){
          sleeptime=config->flushtime;
       } else {
@@ -1778,6 +1819,7 @@ static void *lessfs_init()
     pthread_spin_init(&moddb_spinlock, 0);
     pthread_spin_init(&dbu_spinlock, 0);
     pthread_spin_init(&dbc_spinlock, 0);
+    pthread_spin_init(&dbr_spinlock, 0);
     pthread_spin_init(&dbb_spinlock, 0);
 
 #ifdef LZO
@@ -1795,6 +1837,7 @@ static void *lessfs_init()
     pthread_t flush_thread;
     pthread_t flush_dbu_thread;
     pthread_t flush_dbc_thread;
+    pthread_t flush_dbr_thread;
     pthread_t flush_dbb_thread;
 
     LDEBUG("lessfs_init : worker_lock");
@@ -1829,6 +1872,9 @@ static void *lessfs_init()
     ret = pthread_create(&flush_dbc_thread, NULL, flush_dbc_worker, (void *) NULL);
     if (ret != 0)
         die_syserr();
+    ret = pthread_create(&flush_dbr_thread, NULL, flush_dbr_worker, (void *) NULL);
+    if (ret != 0)
+        die_syserr();
     ret = pthread_create(&flush_dbb_thread, NULL, flush_dbb_worker, (void *) NULL);
     if (ret != 0)
         die_syserr();
@@ -1840,6 +1886,7 @@ static void *lessfs_init()
 
     check_blocksize();
 	read_dbc();	
+	read_dbr();	
 	read_dbu();	
 	read_dbb();
     if ( check_dirty()){
