@@ -168,7 +168,7 @@ int main(int argc, char *argv[])
         p = getenv("ENCRYPT_META");
         if (NULL != p) {
             if (0 != strcasecmp(p, "ON")) {
-                LINFO("Metadata encryption is off");
+                LDEBUG("Metadata encryption is off");
                 config->encryptmeta = 0;
             }
         }

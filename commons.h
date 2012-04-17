@@ -23,6 +23,7 @@ extern TCHDB *dbb;
 extern TCHDB *dbdta;
 extern TCHDB *dbs;
 extern TCBDB *dbdirent;
+extern TCBDB *dbr;
 extern TCBDB *freelist;
 extern TCBDB *dbl;
 extern TCMDB *dbcache;

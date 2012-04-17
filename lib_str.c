@@ -150,3 +150,24 @@ int unrem(char *regel)
         c[0] = 0;
     return (strlen(regel));
 }
+
+char *substr(const char*str, unsigned start, unsigned len)
+{
+    char *stbuf = NULL;
+	stbuf = malloc(len + 1);
+	strncpy(stbuf, str + start, len);
+	stbuf[len] = 0;
+    return stbuf;
+}
+
+char *getextension(unsigned *len, const char *path){
+	char *p, c = '.';
+	unsigned pos;
+	
+	if (NULL != (p = strrchr(path, c))){
+		pos = p - path;
+		*len = strlen(path) - pos;
+		p = substr(path, pos + 1, *len);
+	}
+	return p;
+}

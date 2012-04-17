@@ -24,3 +24,5 @@ void ucase(char *);
 void lcase(char *);
 void trim(char *);
 void stripchar(char *, char);
+char *substr(const char *, unsigned, unsigned);
+char *getextension(unsigned *, const char *);

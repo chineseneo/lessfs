@@ -79,6 +79,7 @@ extern TCBDB *dbl;
 extern TCHDB *dbs;
 extern TCHDB *dbdta;
 extern TCBDB *dbdirent;
+extern TCBDB *dbr;
 extern TCBDB *freelist;
 extern TCMDB *dbcache;
 extern TCMDB *dbdtaq;
